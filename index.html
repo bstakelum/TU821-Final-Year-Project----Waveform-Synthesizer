@@ -24,6 +24,11 @@
         <div id="cameraControls" class="hidden">
           <button id="captureFrame">Capture Frame</button>
           <button id="resetROI">Reset ROI</button>
+          <div class="camera-select-row">
+            <label for="cameraSelect">Camera:</label>
+            <select id="cameraSelect"></select>
+            <button id="refreshCameras">Refresh</button>
+          </div>
           <div class="roi-controls">
             <div class="roi-row">
               <label>Top <input id="roiTop" type="range" min="0" max="80" value="20"> <span id="roiTopVal">20%</span></label>

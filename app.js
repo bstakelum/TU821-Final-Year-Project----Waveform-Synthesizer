@@ -101,6 +101,15 @@ function resetROI() {
 // Camera Setup (start/stop toggle)
 // Prefer front-facing camera helper
 async function getFrontCameraStream() {
+  // if a specific device is selected in the UI, try that first
+  const sel = document.getElementById('cameraSelect');
+  if (sel && sel.value) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: sel.value } }, audio: false });
+    } catch (e) {
+      console.warn('Selected device failed, falling back to facingMode logic', e);
+    }
+  }
   // 1) Try strict facingMode exact
   try {
     return await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: 'user' } }, audio: false });
@@ -169,6 +178,8 @@ video.addEventListener("loadedmetadata", () => {
   waveformCanvas.width = 512;
   waveformCanvas.height = 256;
   bindROIControls();
+  // populate camera list once metadata is available
+  populateCameraList().catch(() => {});
 });
 
 // Capture Frame (process current ROI from the live overlay)
@@ -279,6 +290,66 @@ async function initOpenCV() {
 }
 
 initOpenCV();
+
+// Populate camera select UI
+async function populateCameraList() {
+  const sel = document.getElementById('cameraSelect');
+  if (!navigator.mediaDevices || !sel) return;
+
+  let devices = await navigator.mediaDevices.enumerateDevices();
+  let videoDevices = devices.filter(d => d.kind === 'videoinput');
+
+  // If labels are empty, request temporary permission to reveal labels
+  const hasLabels = videoDevices.some(d => d.label && d.label.length > 0);
+  if (!hasLabels) {
+    try {
+      const tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      tmp.getTracks().forEach(t => t.stop());
+      devices = await navigator.mediaDevices.enumerateDevices();
+      videoDevices = devices.filter(d => d.kind === 'videoinput');
+    } catch (e) {
+      // permission not granted — proceed with whatever labels we have
+    }
+  }
+
+  // Build options
+  sel.innerHTML = '';
+  videoDevices.forEach((d, idx) => {
+    const opt = document.createElement('option');
+    opt.value = d.deviceId;
+    opt.textContent = d.label || `Camera ${idx + 1}`;
+    sel.appendChild(opt);
+  });
+}
+
+// Refresh cameras button
+const refreshBtn = document.getElementById('refreshCameras');
+if (refreshBtn) refreshBtn.addEventListener('click', () => populateCameraList());
+
+// Handle manual camera switching: if user changes selection while a stream is active, restart
+const cameraSelect = document.getElementById('cameraSelect');
+if (cameraSelect) {
+  cameraSelect.addEventListener('change', async () => {
+    if (!cameraSelect.value) return;
+    if (currentStream) {
+      // stop current
+      try { currentStream.getTracks().forEach(t => t.stop()); } catch (e) {}
+      currentStream = null;
+      video.srcObject = null;
+      stopOverlayLoop();
+    }
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: cameraSelect.value } }, audio: false });
+      currentStream = s;
+      video.srcObject = s;
+      startOverlayLoop();
+      if (cameraControls) cameraControls.classList.remove('hidden');
+      startButton.textContent = 'Stop Camera';
+    } catch (err) {
+      console.error('Failed to start selected camera:', err);
+    }
+  });
+}
 
 function savitzkyGolaySmooth(waveform) {
   // simple SG window=5, order=2 coefficients: [-3,12,17,12,-3]/35
