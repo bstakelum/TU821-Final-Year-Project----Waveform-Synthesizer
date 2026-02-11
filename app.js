@@ -117,31 +117,39 @@ async function getFrontCameraStream() {
 
 startButton.addEventListener("click", async () => {
   if (!currentStream) {
-    try {
-      const stream = await getFrontCameraStream();
-      currentStream = stream;
-      video.srcObject = stream;
-      // Start overlay and show controls
-      startOverlayLoop();
-      if (cameraControls) cameraControls.classList.remove('hidden');
-      startButton.textContent = 'Stop Camera';
-    } catch (err) {
-      console.error('Camera access error:', err);
-    }
+    await startCamera();
   } else {
-    // stop the stream
-    try {
-      currentStream.getTracks().forEach(t => t.stop());
-    } catch (e) {}
-    currentStream = null;
-    video.srcObject = null;
-    stopOverlayLoop();
-    if (cameraControls) cameraControls.classList.add('hidden');
-    startButton.textContent = 'Start Camera';
-    // clear overlay
-    pctx.clearRect(0, 0, processingCanvas.width, processingCanvas.height);
+    stopCamera();
   }
 });
+
+// Start camera helper (uses preferred facing)
+async function startCamera() {
+  if (currentStream) return;
+  try {
+    const stream = await getPreferredCameraStream();
+    currentStream = stream;
+    video.srcObject = stream;
+    startOverlayLoop();
+    if (cameraControls) cameraControls.classList.remove('hidden');
+    startButton.textContent = 'Stop Camera';
+  } catch (err) {
+    console.error('Camera access error:', err);
+  }
+}
+
+// Stop camera helper
+function stopCamera() {
+  if (currentStream) {
+    try { currentStream.getTracks().forEach(t => t.stop()); } catch (e) {}
+  }
+  currentStream = null;
+  video.srcObject = null;
+  stopOverlayLoop();
+  if (cameraControls) cameraControls.classList.add('hidden');
+  startButton.textContent = 'Start Camera';
+  pctx.clearRect(0, 0, processingCanvas.width, processingCanvas.height);
+}
 
 // Once video data is available 
 video.addEventListener("loadedmetadata", () => {
@@ -280,20 +288,9 @@ if (cameraToggleBtn) {
     preferredFacing = preferredFacing === 'user' ? 'environment' : 'user';
     updateCameraToggleUI();
     if (currentStream) {
-      try { currentStream.getTracks().forEach(t => t.stop()); } catch (e) {}
-      currentStream = null;
-      video.srcObject = null;
-      stopOverlayLoop();
-      try {
-        const s = await getPreferredCameraStream();
-        currentStream = s;
-        video.srcObject = s;
-        startOverlayLoop();
-        if (cameraControls) cameraControls.classList.remove('hidden');
-        startButton.textContent = 'Stop Camera';
-      } catch (err) {
-        console.error('Failed to start camera after toggle:', err);
-      }
+      // restart camera with new facing preference
+      stopCamera();
+      await startCamera();
     }
   });
 }
