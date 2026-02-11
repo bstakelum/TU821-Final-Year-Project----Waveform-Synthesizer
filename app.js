@@ -101,44 +101,17 @@ function resetROI() {
 // Camera Setup (start/stop toggle)
 // Prefer front-facing camera helper
 async function getFrontCameraStream() {
-  // if a specific device is selected in the UI, try that first
-  const sel = document.getElementById('cameraSelect');
-  if (sel && sel.value) {
-    try {
-      return await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: sel.value } }, audio: false });
-    } catch (e) {
-      console.warn('Selected device failed, falling back to facingMode logic', e);
-    }
-  }
-  // 1) Try strict facingMode exact
+  // Use the preferred facing mode (front/back)
+  const facing = preferredFacing || 'user';
   try {
-    return await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: 'user' } }, audio: false });
+    return await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: facing } }, audio: false });
   } catch (e) {}
 
-  // 2) Try preferred facingMode (more compatible)
   try {
-    return await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'user' } }, audio: false });
+    return await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing } }, audio: false });
   } catch (e) {}
 
-  // 3) Request any camera to obtain device labels (if not already permitted), then pick a device whose label suggests front camera
-  let tempStream = null;
-  try {
-    tempStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-  } catch (e) {
-    // fallthrough
-  }
-
-  try {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const front = devices.find(d => d.kind === 'videoinput' && /front|user|face/i.test(d.label));
-    if (front) {
-      if (tempStream) { tempStream.getTracks().forEach(t => t.stop()); tempStream = null; }
-      return await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: front.deviceId } }, audio: false });
-    }
-  } catch (e) {}
-
-  // 4) Last resort: return the temp stream or any available camera
-  if (tempStream) return tempStream;
+  // Fallback: request any camera
   return await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
 }
 
@@ -178,8 +151,8 @@ video.addEventListener("loadedmetadata", () => {
   waveformCanvas.width = 512;
   waveformCanvas.height = 256;
   bindROIControls();
-  // populate camera list once metadata is available
-  populateCameraList().catch(() => {});
+  // initialize camera toggle UI
+  updateCameraToggleUI();
 });
 
 // Capture Frame (process current ROI from the live overlay)
@@ -291,62 +264,36 @@ async function initOpenCV() {
 
 initOpenCV();
 
-// Populate camera select UI
-async function populateCameraList() {
-  const sel = document.getElementById('cameraSelect');
-  if (!navigator.mediaDevices || !sel) return;
+// Camera preference toggle (front/back)
+let preferredFacing = 'user'; // 'user' (front) or 'environment' (back)
 
-  let devices = await navigator.mediaDevices.enumerateDevices();
-  let videoDevices = devices.filter(d => d.kind === 'videoinput');
-
-  // If labels are empty, request temporary permission to reveal labels
-  const hasLabels = videoDevices.some(d => d.label && d.label.length > 0);
-  if (!hasLabels) {
-    try {
-      const tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-      tmp.getTracks().forEach(t => t.stop());
-      devices = await navigator.mediaDevices.enumerateDevices();
-      videoDevices = devices.filter(d => d.kind === 'videoinput');
-    } catch (e) {
-      // permission not granted — proceed with whatever labels we have
-    }
-  }
-
-  // Build options
-  sel.innerHTML = '';
-  videoDevices.forEach((d, idx) => {
-    const opt = document.createElement('option');
-    opt.value = d.deviceId;
-    opt.textContent = d.label || `Camera ${idx + 1}`;
-    sel.appendChild(opt);
-  });
+function updateCameraToggleUI() {
+  const btn = document.getElementById('cameraToggle');
+  if (!btn) return;
+  btn.textContent = preferredFacing === 'user' ? 'Front' : 'Back';
 }
 
-// Refresh cameras button
-const refreshBtn = document.getElementById('refreshCameras');
-if (refreshBtn) refreshBtn.addEventListener('click', () => populateCameraList());
-
-// Handle manual camera switching: if user changes selection while a stream is active, restart
-const cameraSelect = document.getElementById('cameraSelect');
-if (cameraSelect) {
-  cameraSelect.addEventListener('change', async () => {
-    if (!cameraSelect.value) return;
+// Toggle camera preference and restart camera if already active
+const cameraToggleBtn = document.getElementById('cameraToggle');
+if (cameraToggleBtn) {
+  cameraToggleBtn.addEventListener('click', async () => {
+    preferredFacing = preferredFacing === 'user' ? 'environment' : 'user';
+    updateCameraToggleUI();
     if (currentStream) {
-      // stop current
       try { currentStream.getTracks().forEach(t => t.stop()); } catch (e) {}
       currentStream = null;
       video.srcObject = null;
       stopOverlayLoop();
-    }
-    try {
-      const s = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: cameraSelect.value } }, audio: false });
-      currentStream = s;
-      video.srcObject = s;
-      startOverlayLoop();
-      if (cameraControls) cameraControls.classList.remove('hidden');
-      startButton.textContent = 'Stop Camera';
-    } catch (err) {
-      console.error('Failed to start selected camera:', err);
+      try {
+        const s = await getPreferredCameraStream();
+        currentStream = s;
+        video.srcObject = s;
+        startOverlayLoop();
+        if (cameraControls) cameraControls.classList.remove('hidden');
+        startButton.textContent = 'Stop Camera';
+      } catch (err) {
+        console.error('Failed to start camera after toggle:', err);
+      }
     }
   });
 }
