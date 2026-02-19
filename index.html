@@ -8,6 +8,7 @@
 </head>
 
 <body>
+  <!-- App title and high-level layout container -->
   <h1>Hand-Drawn Waveform Synthesizer</h1>
 
   <div class="container">
@@ -20,6 +21,7 @@
         <canvas id="processingCanvas"></canvas>
       </div>
       <div class="controls">
+        <!-- Primary action starts/stops camera; secondary controls appear while active -->
         <button id="startCamera">Start Camera</button>
         <div id="cameraControls" class="hidden">
           <button id="captureFrame">Capture Frame</button>
@@ -28,6 +30,7 @@
             <button id="cameraToggle">Front</button>
           </div>
           <div class="roi-controls">
+            <!-- ROI sliders define the rectangular capture region in percentages -->
             <div class="roi-row">
               <label>Top <input id="roiTop" type="range" min="0" max="80" value="20"> <span id="roiTopVal">20%</span></label>
               <label>Bottom <input id="roiBottom" type="range" min="20" max="100" value="80"> <span id="roiBottomVal">80%</span></label>
@@ -43,15 +46,33 @@
 
     <!-- Waveform Panel -->
     <div class="panel">
-      <h2>Synthesized Waveform</h2>
+      <h2>Synthesized Waveform <small><span id="audioStatus">Audio: idle</span></small></h2>
       <canvas id="waveformCanvas"></canvas>
+      <!-- Web Audio transport + pitch controls -->
+      <div class="controls audio-controls">
+        <button id="playSynth">Play</button>
+        <label>Frequency
+          <input id="synthFreq" type="range" min="40" max="1000" value="220" />
+          <span id="synthFreqVal">220 Hz</span>
+        </label>
+      </div>
+      <!-- Extraction quality metrics from current capture -->
+      <div id="debugPanel" class="debug-panel">
+        <h3>OpenCV Debug</h3>
+        <div id="debugCompare">Capture a frame to inspect OpenCV preprocessing extraction metrics.</div>
+      </div>
+      <!-- Pixel-level view of the exact preprocessed ROI used by extraction -->
+      <div id="processedPreviewPanel" class="debug-panel">
+        <h3>OpenCV Processed Frame</h3>
+        <canvas id="processedPreviewCanvas"></canvas>
+      </div>
     </div>
 
   </div>
 
   <!-- processingCanvas moved into camera panel as overlay -->
 
-  <!-- OpenCV.js (WASM build) -->
+  <!-- OpenCV is optional: app.js auto-falls back if the runtime is unavailable -->
   <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
   <script src="app.js"></script>
 </body>

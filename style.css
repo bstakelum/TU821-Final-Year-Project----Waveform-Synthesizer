@@ -1,9 +1,11 @@
+/* Global reset for predictable spacing and sizing */
 * {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
 }
 
+/* Base page styling */
 body {
   font-family: system-ui, sans-serif;
   background: #111;
@@ -16,6 +18,7 @@ h1 {
   margin-bottom: 1rem;
 }
 
+/* Two-panel desktop layout (camera + waveform) */
 .container {
   display: flex;
   gap: 1rem;
@@ -37,6 +40,7 @@ canvas {
   border: 1px solid #333;
 }
 
+/* Video wrapper keeps the processing canvas aligned over the video element */
 .video-wrapper {
   position: relative;
 }
@@ -50,6 +54,7 @@ canvas {
   pointer-events: none;
 }
 
+/* Utility class used by JS to show/hide camera-only controls */
 .hidden { display: none !important; }
 
 .roi-controls {
@@ -72,6 +77,7 @@ canvas {
   color: #ddd;
 }
 
+/* Control groups for ROI and camera actions */
 .controls {
   margin-top: 0.5rem;
   display: flex;
@@ -84,6 +90,46 @@ button {
   cursor: pointer;
 }
 
+.audio-controls {
+  margin-top: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.audio-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #ddd;
+}
+
+.audio-controls input[type="range"] {
+  width: 180px;
+}
+
+/* Debug cards for extraction metrics and processed-frame preview */
+.debug-panel {
+  margin-top: 0.9rem;
+  padding: 0.7rem;
+  border: 1px solid #333;
+  border-radius: 6px;
+  background: #121212;
+}
+
+.debug-panel h3 {
+  margin-bottom: 0.4rem;
+  font-size: 0.95rem;
+  color: #ddd;
+}
+
+#debugCompare {
+  color: #cfcfcf;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  white-space: pre-line;
+}
+
+/* Stack panels vertically on smaller screens */
 @media (max-width: 800px) {
   .container {
     flex-direction: column;
