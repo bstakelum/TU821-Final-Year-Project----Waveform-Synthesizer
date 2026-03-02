@@ -1,5 +1,5 @@
-// Main client script:
-// App manager that orchestrates camera capture, preprocessing, extraction, drawing, and audio updates.
+// Main app file:
+// This connects camera capture, image cleanup, waveform detection, drawing, and audio playback.
 import { createCameraController } from './cameraController.js';
 import { createImageProcessor } from './imageProcessing.js';
 import { extractWaveformFromImageData } from './waveformExtractor.js';
@@ -41,15 +41,16 @@ const cameraController = createCameraController({
     waveformCanvas.width = width;
     waveformCanvas.height = 256;
   },
-  onCapture: (imageData) => {
-    processCapturedImage(imageData);
+  onCapture: (imageData, roi) => {
+    processCapturedImage(imageData, roi);
   },
 });
 
 imageProcessor.initProcessor();
 cameraController.init();
 
-function processCapturedImage(imageData) {
+// Process one captured frame and turn it into a drawable/playable waveform.
+function processCapturedImage(imageData, roi) {
   const processedImageData = imageProcessor.preprocessImage(imageData);
   if (!processedImageData) {
     imageProcessor.setProcessingStatus('Preprocessing: failed');
@@ -60,6 +61,7 @@ function processCapturedImage(imageData) {
 
   const waveform = extractWaveformFromImageData(processedImageData, {
     foregroundCutoff: waveformForegroundCutoff,
+    roi,
   });
 
   if (!waveform || waveform.length === 0) {
@@ -71,6 +73,7 @@ function processCapturedImage(imageData) {
   drawWaveform(waveform);
 }
 
+// Draw the extracted waveform line on the waveform canvas.
 function drawWaveform(waveform) {
   wctx.clearRect(0, 0, waveformCanvas.width, waveformCanvas.height);
   wctx.strokeStyle = '#ffffff';

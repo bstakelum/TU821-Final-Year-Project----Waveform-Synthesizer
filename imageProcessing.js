@@ -1,8 +1,9 @@
-// Image-processing module (scaled back):
-// - keeps the same API used by app pipeline
-// - leaves captured ROI unchanged for downstream extraction
-// - optionally renders preview of the unprocessed ROI
+// Image processing:
+// - cleans up the captured frame so the waveform line stands out more clearly
+// - keeps the same input/output shape for the rest of the app
+// - can show a preview of the processed image for debugging
 
+// Build and return the image processing helper used by the app.
 export function createImageProcessor({
   statusEl,
   previewCanvas,
@@ -20,17 +21,17 @@ export function createImageProcessor({
 
   const ADAPTIVE_THRESHOLD_PERCENTILE = 96;
 
-  // Update optional preprocessing status text in the UI.
+  // Show preprocessing status text in the UI when a status element is provided.
   function setProcessingStatus(text) {
     if (statusEl) statusEl.textContent = text;
   }
 
-  // Keep the initialization hook so app pipeline remains unchanged.
+  // Startup hook for the app.
   async function initProcessor() {
     setProcessingStatus('Preprocessing: custom pipeline ready');
   }
 
-  // Draw processed ROI to preview panel for debugging/inspection.
+  // Draw the processed image in the preview panel.
   function renderProcessedPreview(imageData) {
     if (!previewCanvas || !previewCtx || !imageData) return;
 
@@ -42,10 +43,12 @@ export function createImageProcessor({
     previewCtx.putImageData(imageData, 0, 0);
   }
 
+  // Make a full copy of image data so edits do not touch the original.
   function cloneImageData(imageData) {
     return new ImageData(new Uint8ClampedArray(imageData.data), imageData.width, imageData.height);
   }
 
+  // Find a brightness value at a given percentile (for auto-thresholding).
   function getGrayPercentile(imageData, percentile) {
     const p = Math.max(0, Math.min(100, percentile));
     const { data } = imageData;
@@ -61,6 +64,7 @@ export function createImageProcessor({
     return values[index];
   }
 
+  // Convert color image data to grayscale.
   function rgbaToGrayscale(imageData) {
     const output = cloneImageData(imageData);
     const { data } = output;
@@ -81,6 +85,7 @@ export function createImageProcessor({
     return output;
   }
 
+  // Smooth small speckles with a simple local blur.
   function denoiseImage(imageData) {
     const { width, height, data } = imageData;
     const output = cloneImageData(imageData);
@@ -115,6 +120,7 @@ export function createImageProcessor({
     return output;
   }
 
+  // Reduce uneven lighting so the waveform stands out more evenly.
   function flattenIllumination(imageData) {
     const { width, height, data } = imageData;
     const output = cloneImageData(imageData);
@@ -155,6 +161,7 @@ export function createImageProcessor({
     return output;
   }
 
+  // Stretch contrast so dark and bright areas separate more clearly.
   function enhanceContrast(imageData) {
     const output = cloneImageData(imageData);
     const { data } = output;
@@ -176,6 +183,7 @@ export function createImageProcessor({
     return output;
   }
 
+  // Turn grayscale into a black/white mask.
   function applyThreshold(imageData) {
     const output = cloneImageData(imageData);
 
@@ -194,6 +202,7 @@ export function createImageProcessor({
     return output;
   }
 
+  // Remove tiny artifacts and connect broken trace pieces in the mask.
   function cleanupMask(imageData) {
     const { width, height, data } = imageData;
     const output = cloneImageData(imageData);
@@ -201,6 +210,7 @@ export function createImageProcessor({
 
     const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
+    // Shrink white regions slightly to remove thin noise.
     function erode3x3(source, target) {
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
@@ -225,6 +235,7 @@ export function createImageProcessor({
       }
     }
 
+    // Grow white regions to reconnect small breaks.
     function dilate3x3(source, target) {
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
@@ -252,6 +263,7 @@ export function createImageProcessor({
       }
     }
 
+    // Remove isolated white dots that likely come from noise.
     function suppressIsolatedPixels(source, target, minNeighborCount) {
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
@@ -296,6 +308,7 @@ export function createImageProcessor({
     return output;
   }
 
+  // Run the full preprocessing pipeline in order.
   function preprocessImage(imageData) {
     if (!imageData) return null;
 

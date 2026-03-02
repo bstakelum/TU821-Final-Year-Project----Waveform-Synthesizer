@@ -1,7 +1,6 @@
-// Waveform extractor module:
-// - primary center-of-mass tracker across columns
-// - confidence-based trim of weak prefix/suffix regions
-// - no fallback paths (best-path/greedy removed)
+// Waveform extractor:
+// - finds the waveform line across the image
+// - trims weak/noisy start and end sections
 
 const DEFAULT_FOREGROUND_CUTOFF = 200;
 
@@ -30,10 +29,12 @@ const WAVEFORM_POSTPROCESSING_CONFIG = {
   interpolationMaxGap: 30,
 };
 
+// Keep a number inside a min/max range.
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+// Measure how much of a local area is bright foreground.
 function getForegroundDensity(imageData, x, y, radiusX, radiusY, cutoff) {
   const { width, height, data } = imageData;
   let foreground = 0;
@@ -52,6 +53,7 @@ function getForegroundDensity(imageData, x, y, radiusX, radiusY, cutoff) {
   return total > 0 ? foreground / total : 0;
 }
 
+// Count how many path points are valid.
 function countValidPathPoints(pathY) {
   let count = 0;
   for (let i = 0; i < pathY.length; i++) {
@@ -60,6 +62,7 @@ function countValidPathPoints(pathY) {
   return count;
 }
 
+// Get the median of finite values in a 1D window.
 function getMedianOfFiniteWindow(values, start, end) {
   const finite = [];
   for (let i = start; i <= end; i++) {
@@ -71,6 +74,7 @@ function getMedianOfFiniteWindow(values, start, end) {
   return finite[Math.floor(finite.length / 2)];
 }
 
+// Smooth a 1D signal with a median filter that skips invalid values.
 function medianFilterFinite1D(values, radius) {
   if (radius <= 0) return Float32Array.from(values);
   const output = new Float32Array(values.length);
@@ -83,6 +87,7 @@ function medianFilterFinite1D(values, radius) {
   return output;
 }
 
+// Smooth a 1D signal with a moving average.
 function movingAverage1D(values, radius) {
   if (radius <= 0) return Float32Array.from(values);
   const out = new Float32Array(values.length);
@@ -100,19 +105,73 @@ function movingAverage1D(values, radius) {
   return out;
 }
 
-function trimTracePathByConfidence(pathY, imageData, foregroundCutoff) {
+// Clamp ROI input so it is valid for the current image size.
+function normalizeROI(roi, width, height) {
+  if (!roi) return null;
+
+  const x = clamp(Math.floor(roi.x ?? 0), 0, width - 1);
+  const y = clamp(Math.floor(roi.y ?? 0), 0, height - 1);
+  const maxWidth = width - x;
+  const maxHeight = height - y;
+  const roiWidth = clamp(Math.floor(roi.width ?? width), 1, maxWidth);
+  const roiHeight = clamp(Math.floor(roi.height ?? height), 1, maxHeight);
+
+  return {
+    x,
+    y,
+    width: roiWidth,
+    height: roiHeight,
+    xMin: x,
+    xMax: x + roiWidth - 1,
+    yMin: y,
+    yMax: y + roiHeight - 1,
+  };
+}
+
+// Check whether a column index is inside ROI bounds.
+function isXInROI(x, roiBounds) {
+  return !roiBounds || (x >= roiBounds.xMin && x <= roiBounds.xMax);
+}
+
+// Get full allowed Y search range for a column.
+function getROIFullYRange(roiBounds, height) {
+  if (!roiBounds) {
+    return { yMin: 0, yMax: height - 1 };
+  }
+  return { yMin: roiBounds.yMin, yMax: roiBounds.yMax };
+}
+
+// Get band-limited Y search range, clipped to ROI when present.
+function getROIBandYRange(predictedY, height, roiBounds, bandHalfWidth) {
+  const yMinBand = clamp(Math.floor(predictedY - bandHalfWidth), 0, height - 1);
+  const yMaxBand = clamp(Math.ceil(predictedY + bandHalfWidth), 0, height - 1);
+
+  if (!roiBounds) {
+    return { yMin: yMinBand, yMax: yMaxBand };
+  }
+
+  return {
+    yMin: Math.max(yMinBand, roiBounds.yMin),
+    yMax: Math.min(yMaxBand, roiBounds.yMax),
+  };
+}
+
+// Trim weak/noisy start and end sections of the detected path.
+function trimTracePathByConfidence(pathY, imageData, foregroundCutoff, roiBounds = null) {
   const { width } = imageData;
   if (!pathY || pathY.length === 0) return pathY;
+
+  const effectiveWidth = roiBounds ? roiBounds.width : width;
 
   const settings = {
     ...TRIM_CONFIDENCE_CONFIG,
     minSpanColumns: Math.max(
       TRIM_CONFIDENCE_CONFIG.minSpanColumnsFloor,
-      Math.floor(width * TRIM_CONFIDENCE_CONFIG.minSpanColumnsRatio)
+      Math.floor(effectiveWidth * TRIM_CONFIDENCE_CONFIG.minSpanColumnsRatio)
     ),
     minKeepValidColumns: Math.max(
       TRIM_CONFIDENCE_CONFIG.minKeepValidColumnsFloor,
-      Math.floor(width * TRIM_CONFIDENCE_CONFIG.minKeepValidColumnsRatio)
+      Math.floor(effectiveWidth * TRIM_CONFIDENCE_CONFIG.minKeepValidColumnsRatio)
     ),
   };
 
@@ -214,7 +273,8 @@ function trimTracePathByConfidence(pathY, imageData, foregroundCutoff) {
   return trimmed;
 }
 
-function findCenterOfMassTracePath(imageData, foregroundCutoff) {
+// Track the waveform line across columns using center-of-mass scoring.
+function findCenterOfMassTracePath(imageData, foregroundCutoff, roiBounds = null) {
   const { width, height, data } = imageData;
   const pathY = new Float32Array(width);
   for (let i = 0; i < width; i++) {
@@ -250,6 +310,11 @@ function findCenterOfMassTracePath(imageData, foregroundCutoff) {
   };
 
   for (let x = 0; x < width; x++) {
+    if (!isXInROI(x, roiBounds)) {
+      pathY[x] = NaN;
+      continue;
+    }
+
     const prev = x > 0 ? pathY[x - 1] : NaN;
     const prev2 = x > 1 ? pathY[x - 2] : NaN;
 
@@ -260,12 +325,11 @@ function findCenterOfMassTracePath(imageData, foregroundCutoff) {
       predictedY = prev;
     }
 
-    const yMinBand = clamp(Math.floor(predictedY - settings.bandHalfWidth), 0, height - 1);
-    const yMaxBand = clamp(Math.ceil(predictedY + settings.bandHalfWidth), 0, height - 1);
-
-    let yEstimate = computeColumnCOM(x, yMinBand, yMaxBand);
+    const bandRange = getROIBandYRange(predictedY, height, roiBounds, settings.bandHalfWidth);
+    let yEstimate = computeColumnCOM(x, bandRange.yMin, bandRange.yMax);
     if (!Number.isFinite(yEstimate)) {
-      yEstimate = computeColumnCOM(x, 0, height - 1);
+      const fullRange = getROIFullYRange(roiBounds, height);
+      yEstimate = computeColumnCOM(x, fullRange.yMin, fullRange.yMax);
     }
 
     if (!Number.isFinite(yEstimate)) {
@@ -290,6 +354,7 @@ function findCenterOfMassTracePath(imageData, foregroundCutoff) {
   return quantized;
 }
 
+// Fill short missing gaps between nearby valid waveform points.
 function interpolateWaveform(waveform) {
   const { interpolationMaxGap: maxGap } = WAVEFORM_POSTPROCESSING_CONFIG;
   let i = 0;
@@ -319,91 +384,29 @@ function interpolateWaveform(waveform) {
   }
 }
 
+// Center waveform around zero and replace invalid points safely.
 function zeroAndCenterWaveform(waveform) {
   let sum = 0;
   let count = 0;
 
   for (let i = 0; i < waveform.length; i++) {
-    if (Number.isNaN(waveform[i])) {
-      waveform[i] = 0;
+    if (!Number.isNaN(waveform[i])) {
+      sum += waveform[i];
+      count++;
     }
-    sum += waveform[i];
-    count++;
   }
 
   const mean = count > 0 ? sum / count : 0;
   for (let i = 0; i < waveform.length; i++) {
-    waveform[i] -= mean;
-  }
-}
-
-function anchorWaveformEndpointsToZero(waveform) {
-  if (!waveform || waveform.length < 2) return;
-
-  const lastIndex = waveform.length - 1;
-  const startValue = waveform[0];
-  const endValue = waveform[lastIndex];
-
-  for (let i = 0; i <= lastIndex; i++) {
-    const t = i / lastIndex;
-    const baseline = startValue + (endValue - startValue) * t;
-    waveform[i] -= baseline;
-  }
-}
-
-function rotateWaveformInPlace(waveform, startIndex) {
-  const length = waveform.length;
-  if (length < 2) return;
-  const normalizedStart = ((startIndex % length) + length) % length;
-  if (normalizedStart === 0) return;
-
-  const rotated = new Float32Array(length);
-  for (let i = 0; i < length; i++) {
-    rotated[i] = waveform[(normalizedStart + i) % length];
-  }
-
-  for (let i = 0; i < length; i++) {
-    waveform[i] = rotated[i];
-  }
-}
-
-function alignWaveformStartToZeroCrossing(waveform) {
-  if (!waveform || waveform.length < 4) return;
-
-  let bestIndex = -1;
-  let bestScore = Infinity;
-
-  for (let i = 0; i < waveform.length - 1; i++) {
-    const a = waveform[i];
-    const b = waveform[i + 1];
-    const hasCrossing = (a <= 0 && b >= 0) || (a >= 0 && b <= 0);
-    if (!hasCrossing) continue;
-
-    const isRising = a <= 0 && b >= 0;
-    if (!isRising) continue;
-
-    const score = Math.abs(a) + Math.abs(b);
-    if (score < bestScore) {
-      bestScore = score;
-      bestIndex = Math.abs(a) <= Math.abs(b) ? i : i + 1;
+    if (Number.isNaN(waveform[i])) {
+      waveform[i] = 0;
+    } else {
+      waveform[i] -= mean;
     }
   }
-
-  if (bestIndex < 0) {
-    for (let i = 0; i < waveform.length; i++) {
-      const score = Math.abs(waveform[i]);
-      if (score < bestScore) {
-        bestScore = score;
-        bestIndex = i;
-      }
-    }
-  }
-
-  if (bestIndex > 0) {
-    rotateWaveformInPlace(waveform, bestIndex);
-  }
 }
 
+// Main entry: extract a normalized waveform from processed image data.
 export function extractWaveformFromImageData(imageData, options = {}) {
   if (!imageData || !Number.isFinite(imageData.width) || !Number.isFinite(imageData.height)) {
     return null;
@@ -416,20 +419,24 @@ export function extractWaveformFromImageData(imageData, options = {}) {
     ? options.foregroundCutoff
     : DEFAULT_FOREGROUND_CUTOFF;
 
-  const rawTracePath = findCenterOfMassTracePath(imageData, foregroundCutoff);
-  const tracePath = trimTracePathByConfidence(rawTracePath, imageData, foregroundCutoff);
+  const roiBounds = normalizeROI(options.roi || null, width, height);
+
+  const rawTracePath = findCenterOfMassTracePath(imageData, foregroundCutoff, roiBounds);
+  const tracePath = trimTracePathByConfidence(rawTracePath, imageData, foregroundCutoff, roiBounds);
 
   const waveform = new Float32Array(width);
   for (let x = 0; x < width; x++) {
+    if (!isXInROI(x, roiBounds)) {
+      waveform[x] = NaN;
+      continue;
+    }
+
     const yPos = tracePath[x];
     waveform[x] = yPos >= 0 ? 1 - (yPos / height) * 2 : NaN;
   }
 
   interpolateWaveform(waveform);
   zeroAndCenterWaveform(waveform);
-  anchorWaveformEndpointsToZero(waveform);
-  alignWaveformStartToZeroCrossing(waveform);
-  anchorWaveformEndpointsToZero(waveform);
 
   return waveform;
 }

@@ -1,7 +1,7 @@
-// Audio engine module (scaled back):
-// - keeps Web Audio API setup and UI wiring
-// - removes oscillator/synthesis logic
-// - preserves public API for future custom synthesis implementation
+// Audio engine:
+// - handles browser audio setup and play/stop button behavior
+// - receives waveform data and prepares it for sound playback
+// Build and return the audio controller used by the app.
 export function createSynthAudioEngine({
   playButton,
   statusEl,
@@ -11,10 +11,12 @@ export function createSynthAudioEngine({
   let latestAudioWaveform = null;
   let isActive = false;
 
+  // Show audio state text in the UI.
   function setStatus(text) {
     if (statusEl) statusEl.textContent = text;
   }
 
+  // Create browser audio objects the first time they are needed.
   function ensureAudioEngine() {
     if (!audioContext) {
       audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -27,6 +29,7 @@ export function createSynthAudioEngine({
     }
   }
 
+  // Play a short beep so users can hear that audio is active.
   function playConfirmationBeep() {
     if (!audioContext) return;
 
@@ -52,15 +55,19 @@ export function createSynthAudioEngine({
     };
   }
 
+  // Prepare new waveform data for synthesis playback.
   function prepareWaveformForSynthesis() {
   }
 
+  // Start custom synthesis playback (placeholder hook).
   async function startCustomSynthesis() {
   }
 
+  // Stop custom synthesis playback (placeholder hook).
   async function stopCustomSynthesis() {
   }
 
+  // Accept waveform data from extraction and update ready state.
   function updateWaveform(waveform) {
     latestAudioWaveform = waveform || null;
     prepareWaveformForSynthesis(latestAudioWaveform);
@@ -75,6 +82,7 @@ export function createSynthAudioEngine({
     }
   }
 
+  // Turn audio on and start playback behavior.
   async function startAudio() {
     ensureAudioEngine();
 
@@ -90,6 +98,7 @@ export function createSynthAudioEngine({
     setStatus('Audio: context active (synthesis logic removed)');
   }
 
+  // Pause audio and return UI to idle state.
   async function stopAudio() {
     if (!audioContext) return;
 
@@ -104,6 +113,7 @@ export function createSynthAudioEngine({
     setStatus('Audio: idle');
   }
 
+  // Toggle between audio on and audio off.
   async function toggleAudio() {
     if (isActive) {
       await stopAudio();

@@ -1,7 +1,8 @@
-// Camera controller module:
-// - manages camera lifecycle and facing selection
-// - maintains ROI sliders and overlay drawing
-// - captures clean ROI ImageData for downstream processing
+// Camera controller:
+// - turns the camera on/off and switches front/back camera
+// - handles ROI sliders and draws the ROI box overlay
+// - captures a clean full frame and reports ROI bounds for later processing
+// Build and return the camera controller used by the app.
 export function createCameraController({
   video,
   processingCanvas,
@@ -38,7 +39,7 @@ export function createCameraController({
     rightVal,
   } = roiElements;
 
-  // Mirror internal ROI state to slider values + text labels.
+  // Keep the slider values and text labels in sync with the current ROI.
   function updateROIDisplayOnly() {
     if (topVal) topVal.textContent = Math.round(roiTopPct * 100) + '%';
     if (bottomVal) bottomVal.textContent = Math.round(roiBottomPct * 100) + '%';
@@ -60,8 +61,9 @@ export function createCameraController({
     updateROIDisplayOnly();
   }
 
-  // Bind ROI slider interactions and keep ranges consistent.
+  // Connect ROI sliders and keep valid top/bottom and left/right limits.
   function bindROIControls() {
+    // Refresh slider labels and values after ROI changes.
     function updateDisplays() {
       if (topVal) topVal.textContent = Math.round(roiTopPct * 100) + '%';
       if (bottomVal) bottomVal.textContent = Math.round(roiBottomPct * 100) + '%';
@@ -106,7 +108,7 @@ export function createCameraController({
     }
   }
 
-  // Compute pixel ROI rectangle from normalized percentages.
+  // Convert ROI percentages into pixel coordinates.
   function computeROI() {
     const x = Math.floor(processingCanvas.width * roiLeftPct);
     const y = Math.floor(processingCanvas.height * roiTopPct);
@@ -115,7 +117,7 @@ export function createCameraController({
     return { x, y, width: w, height: h };
   }
 
-  // Draw dimmed mask + ROI rectangle over the live video frame.
+  // Draw a shaded overlay so the selected ROI is easy to see.
   function drawOverlay() {
     const roi = computeROI();
 
@@ -133,8 +135,9 @@ export function createCameraController({
     pctx.restore();
   }
 
-  // Start requestAnimationFrame loop for live overlay rendering.
+  // Keep the live overlay updating while the camera is running.
   function startOverlayLoop() {
+    // Draw one overlay frame, then schedule the next one.
     function loop() {
       pctx.drawImage(video, 0, 0, processingCanvas.width, processingCanvas.height);
       drawOverlay();
@@ -144,7 +147,7 @@ export function createCameraController({
     if (overlayAnimationId == null) loop();
   }
 
-  // Stop overlay rendering loop.
+  // Stop drawing the live overlay.
   function stopOverlayLoop() {
     if (overlayAnimationId != null) {
       cancelAnimationFrame(overlayAnimationId);
@@ -152,13 +155,13 @@ export function createCameraController({
     }
   }
 
-  // Keep toggle button text synchronized with preferred facing mode.
+  // Update button text so it shows which camera side is selected.
   function updateCameraToggleUI() {
     if (!cameraToggleButton) return;
     cameraToggleButton.textContent = preferredFacing === 'user' ? 'Front' : 'Back';
   }
 
-  // Try preferred facing mode first, then fall back to any available camera.
+  // Try the selected camera side first, then fall back to any camera.
   async function getFrontCameraStream() {
     const facing = preferredFacing || 'user';
 
@@ -173,7 +176,7 @@ export function createCameraController({
     return await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
   }
 
-  // Start camera stream and overlay.
+  // Start the camera and begin drawing the overlay.
   async function startCamera() {
     if (currentStream) return;
 
@@ -189,7 +192,7 @@ export function createCameraController({
     }
   }
 
-  // Stop camera stream and clear overlay canvas.
+  // Stop the camera and clear the overlay.
   function stopCamera() {
     if (currentStream) {
       try {
@@ -205,21 +208,22 @@ export function createCameraController({
     pctx.clearRect(0, 0, processingCanvas.width, processingCanvas.height);
   }
 
-  // Capture ROI pixels from a clean offscreen frame (no overlay graphics).
-  function captureCurrentROIImageData() {
-    const roi = computeROI();
-    if (roi.width <= 0 || roi.height <= 0) return null;
-
+  // Capture a clean frame without overlay graphics.
+  // ROI bounds are returned too, so later steps can ignore pixels outside ROI
+  // while keeping the same full-frame pixel layout.
+  function captureCurrentFrameImageData() {
     cctx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
-    return cctx.getImageData(roi.x, roi.y, roi.width, roi.height);
+    const imageData = cctx.getImageData(0, 0, captureCanvas.width, captureCanvas.height);
+    const roi = computeROI();
+    return { imageData, roi };
   }
 
-  // Backwards-compatible wrapper name used internally.
+  // Small wrapper so internal naming stays consistent.
   async function getPreferredCameraStream() {
     return await getFrontCameraStream();
   }
 
-  // One-time event binding and metadata setup.
+  // Set up UI events once and initialize canvas sizes when video metadata is ready.
   function init() {
     if (startButton) {
       startButton.addEventListener('click', async () => {
@@ -233,9 +237,11 @@ export function createCameraController({
 
     if (captureButton) {
       captureButton.addEventListener('click', () => {
-        const imageData = captureCurrentROIImageData();
-        if (!imageData) return;
-        if (typeof onCapture === 'function') onCapture(imageData);
+        const captureResult = captureCurrentFrameImageData();
+        if (!captureResult || !captureResult.imageData) return;
+        if (typeof onCapture === 'function') {
+          onCapture(captureResult.imageData, captureResult.roi);
+        }
       });
     }
 
