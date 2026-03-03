@@ -25,6 +25,22 @@ It was built as part of the TU821 Honours Degree in Electrical and Electronic En
 6. Fill short gaps, center the waveform, and draw it to the waveform panel.
 7. Send the waveform data to the audio module.
 
+## Audio Synthesis (Current Stage)
+
+The audio module now plays the captured waveform as a looping wavetable tone.
+At this stage, the goal is to make waveform concepts easy to hear rather than perfect audio accuracy.
+
+- The waveform values are cleaned so non-numeric points will safely become 0.
+- The waveform will be centered around zero (DC offset removed).
+- The waveform will be resized to a fixed table length (2048 samples) using linear interpolation.
+- The table will loop continuously to create a steady tone.
+
+### What users should hear
+
+- More periods (oscillations) packed into the same captured sample space will sound higher in pitch.
+- Fewer periods in that same space will sound lower in pitch.
+- Relative amplitude differences are currently preserved (no peak normalization), so louder/quieter differences between captures can be heard more directly.
+
 ## Tuning Guide
 
 ### Image Processing (imageProcessing.js)
