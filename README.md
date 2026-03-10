@@ -2,8 +2,17 @@ Web app: https://bstakelum.github.io/Waveform-Synthesizer/
 
 # TU821 Final Year Project — Waveform Synthesizer
 
-This is a browser app that lets you capture a waveform from camera input and turn it into audio-ready data.
+This browser app captures a waveform trace from camera input and turns it into a playable wavetable.
 It was built as part of the TU821 Honours Degree in Electrical and Electronic Engineering at Technological University Dublin.
+
+## Current Features
+
+- Camera capture with front/back toggle and ROI selection.
+- Image preprocessing pipeline with processed-frame preview.
+- Waveform extraction with confidence-based trimming and gap filling.
+- Test signal generator (sine/cosine, configurable periods).
+- Wavetable playback with adjustable panel period (ms).
+- Frequency spectrum view with linear/log scale and dominant-frequency label.
 
 ## Project Files
 
@@ -13,7 +22,7 @@ It was built as part of the TU821 Honours Degree in Electrical and Electronic En
 - cameraController.js: Camera start/stop, ROI sliders, and overlay drawing.
 - imageProcessing.js: Image cleanup steps that make the waveform line easier to detect.
 - waveformExtractor.js: Waveform line detection, trimming, and post-processing.
-- audioEngine.js: Audio setup and play/stop behavior.
+- audioEngine.js: Wavetable synthesis and spectrum rendering.
 
 ## How the Pipeline Works
 
@@ -25,21 +34,27 @@ It was built as part of the TU821 Honours Degree in Electrical and Electronic En
 6. Fill short gaps, center the waveform, and draw it to the waveform panel.
 7. Send the waveform data to the audio module.
 
-## Audio Synthesis (Current Stage)
+## Audio Synthesis
 
-The audio module now plays the captured waveform as a looping wavetable tone.
-At this stage, the goal is to make waveform concepts easy to hear rather than perfect audio accuracy.
+The audio module plays the waveform as a looping wavetable tone.
+The loop period is user-adjustable via the Panel Period (ms) input in the waveform panel.
 
-- The waveform values are cleaned so non-numeric points will safely become 0.
-- The waveform will be centered around zero (DC offset removed).
-- The waveform will be resized to a fixed table length (2048 samples) using linear interpolation.
-- The table will loop continuously to create a steady tone.
+- Non-numeric waveform points are sanitized.
+- DC offset is removed before playback.
+- Lower-resolution waveforms are optionally upsampled to an integer multiple, capped by `MAX_INTERPOLATED_SAMPLES`.
+- The wavetable loops continuously, and playback rate is adjusted to match the selected panel period.
 
-### What users should hear
+### What You Should Hear
 
 - More periods (oscillations) packed into the same captured sample space will sound higher in pitch.
 - Fewer periods in that same space will sound lower in pitch.
-- Relative amplitude differences are currently preserved (no peak normalization), so louder/quieter differences between captures can be heard more directly.
+- Changing Panel Period (ms) changes the base loop frequency.
+
+## Spectrum Notes
+
+- Spectrum magnitudes are computed with Goertzel bins.
+- The displayed peak frequency uses a denser search pass, so it is not limited to bar centers.
+- Linear and log modes change visual spacing, not the underlying waveform data.
 
 ## Tuning Guide
 
@@ -59,6 +74,13 @@ At this stage, the goal is to make waveform concepts easy to hear rather than pe
 - CENTER_OF_MASS_CONFIG.maxJumpPx: maximum allowed vertical jump between columns.
 - TRIM_CONFIDENCE_CONFIG: settings for trace start/end trimming.
 - WAVEFORM_POSTPROCESSING_CONFIG.interpolationMaxGap: largest missing gap that will be filled.
+
+### Audio (audioEngine.js)
+
+- MAX_INTERPOLATED_SAMPLES: cap used when choosing integer-multiple upsampling.
+- MIN_PANEL_DURATION_SECONDS / MAX_PANEL_DURATION_SECONDS: panel period bounds.
+- SPECTRUM_BAR_COUNT: number of visual bars.
+- PEAK_ESTIMATE_COARSE_STEPS / PEAK_ESTIMATE_REFINE_STEPS: dominant-frequency search density.
 
 ## License
 

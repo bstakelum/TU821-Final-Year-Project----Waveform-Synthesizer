@@ -1,11 +1,10 @@
 // Image processing:
-// - cleans up the captured frame so the waveform line stands out more clearly
-// - keeps the same input/output shape for the rest of the app
-// - can show a preview of the processed image for debugging
+// - cleans captured frames so the waveform trace stands out against background noise
+// - preserves image shape for downstream extraction (same width/height)
+// - can render a processed preview for visual debugging
 
 // Build and return the image processing helper used by the app.
 export function createImageProcessor({
-  statusEl,
   previewCanvas,
 } = {}) {
   const previewCtx = previewCanvas ? previewCanvas.getContext('2d') : null;
@@ -21,14 +20,18 @@ export function createImageProcessor({
 
   const ADAPTIVE_THRESHOLD_PERCENTILE = 96;
 
-  // Show preprocessing status text in the UI when a status element is provided.
-  function setProcessingStatus(text) {
-    if (statusEl) statusEl.textContent = text;
-  }
+  // Run the full preprocessing pipeline in order.
+  function preprocessImage(imageData) {
+    if (!imageData) return null;
 
-  // Startup hook for the app.
-  async function initProcessor() {
-    setProcessingStatus('Preprocessing: custom pipeline ready');
+    const grayscale = rgbaToGrayscale(imageData);
+    const denoised = denoiseImage(grayscale);
+    const flattened = flattenIllumination(denoised);
+    const contrastEnhanced = enhanceContrast(flattened);
+    const thresholded = applyThreshold(contrastEnhanced);
+    const cleaned = cleanupMask(thresholded);
+
+    return cleaned;
   }
 
   // Draw the processed image in the preview panel.
@@ -308,24 +311,8 @@ export function createImageProcessor({
     return output;
   }
 
-  // Run the full preprocessing pipeline in order.
-  function preprocessImage(imageData) {
-    if (!imageData) return null;
-
-    const grayscale = rgbaToGrayscale(imageData);
-    const denoised = denoiseImage(grayscale);
-    const flattened = flattenIllumination(denoised);
-    const contrastEnhanced = enhanceContrast(flattened);
-    const thresholded = applyThreshold(contrastEnhanced);
-    const cleaned = cleanupMask(thresholded);
-
-    return cleaned;
-  }
-
   return {
-    initProcessor,
     preprocessImage,
     renderProcessedPreview,
-    setProcessingStatus,
   };
 }

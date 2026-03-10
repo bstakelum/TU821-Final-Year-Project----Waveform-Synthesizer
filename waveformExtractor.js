@@ -1,33 +1,75 @@
 // Waveform extractor:
-// - finds the waveform line across the image
-// - trims weak/noisy start and end sections
+// - tracks the waveform trace across columns using center-of-mass scoring
+// - trims weak/noisy edges with confidence hysteresis
+// - fills short gaps and recenters output for synthesis
 
 const DEFAULT_FOREGROUND_CUTOFF = 200;
 
 const TRIM_CONFIDENCE_CONFIG = {
   confWindowRadius: 1,
   smoothRadius: 4,
-  highThreshold: 0.45,
-  lowThreshold: 0.28,
-  enterRun: 6,
-  exitRun: 8,
+  highThreshold: 0.52,
+  lowThreshold: 0.34,
+  enterRun: 10,
+  exitRun: 6,
   minSpanColumnsRatio: 0.15,
   minSpanColumnsFloor: 12,
-  continuityMaxDelta: 12,
+  continuityMaxDelta: 10,
   minKeepValidColumnsRatio: 0.08,
   minKeepValidColumnsFloor: 10,
 };
 
 const CENTER_OF_MASS_CONFIG = {
-  bandHalfWidth: 20,
-  minForegroundCount: 3,
+  bandHalfWidth: 14,
+  minForegroundCount: 5,
   maxJumpPx: 12,
   medianRadius: 3,
 };
 
 const WAVEFORM_POSTPROCESSING_CONFIG = {
-  interpolationMaxGap: 30,
+  interpolationMaxGap: 10,
 };
+
+// Main entry: extract a normalized waveform from processed image data.
+export function extractWaveformFromImageData(imageData, options = {}) {
+  if (!imageData || !Number.isFinite(imageData.width) || !Number.isFinite(imageData.height)) {
+    return null;
+  }
+
+  const { width, height } = imageData;
+  if (width <= 0 || height <= 0) return null;
+
+  const foregroundCutoff = Number.isFinite(options.foregroundCutoff)
+    ? options.foregroundCutoff
+    : DEFAULT_FOREGROUND_CUTOFF;
+
+  const roiBounds = normalizeROI(options.roi || null, width, height);
+
+  // 1) Detect trace path, then trim low-confidence edges.
+  const rawTracePath = findCenterOfMassTracePath(imageData, foregroundCutoff, roiBounds);
+  const tracePath = trimTracePathByConfidence(rawTracePath, imageData, foregroundCutoff, roiBounds);
+
+  const normYMin = roiBounds ? roiBounds.yMin : 0;
+  const normYMax = roiBounds ? roiBounds.yMax : height - 1;
+  const normYSpan = Math.max(1, normYMax - normYMin);
+
+  const waveform = new Float32Array(width);
+  for (let x = 0; x < width; x++) {
+    if (!isXInROI(x, roiBounds)) {
+      waveform[x] = NaN;
+      continue;
+    }
+
+    const yPos = tracePath[x];
+    waveform[x] = yPos >= 0 ? 1 - ((yPos - normYMin) / normYSpan) * 2 : NaN;
+  }
+
+  // 2) Fill short gaps and center around zero for stable playback.
+  interpolateWaveform(waveform);
+  zeroAndCenterWaveform(waveform);
+
+  return waveform;
+}
 
 // Keep a number inside a min/max range.
 function clamp(value, min, max) {
@@ -133,16 +175,15 @@ function isXInROI(x, roiBounds) {
   return !roiBounds || (x >= roiBounds.xMin && x <= roiBounds.xMax);
 }
 
-// Get full allowed Y search range for a column.
-function getROIFullYRange(roiBounds, height) {
-  if (!roiBounds) {
-    return { yMin: 0, yMax: height - 1 };
+// Get Y search range, optionally band-limited and clipped to ROI when present.
+function getROIYRange(height, roiBounds, predictedY = null, bandHalfWidth = null) {
+  if (!Number.isFinite(predictedY) || !Number.isFinite(bandHalfWidth) || bandHalfWidth < 0) {
+    if (!roiBounds) {
+      return { yMin: 0, yMax: height - 1 };
+    }
+    return { yMin: roiBounds.yMin, yMax: roiBounds.yMax };
   }
-  return { yMin: roiBounds.yMin, yMax: roiBounds.yMax };
-}
 
-// Get band-limited Y search range, clipped to ROI when present.
-function getROIBandYRange(predictedY, height, roiBounds, bandHalfWidth) {
   const yMinBand = clamp(Math.floor(predictedY - bandHalfWidth), 0, height - 1);
   const yMaxBand = clamp(Math.ceil(predictedY + bandHalfWidth), 0, height - 1);
 
@@ -206,7 +247,6 @@ function trimTracePathByConfidence(pathY, imageData, foregroundCutoff, roiBounds
 
   const smoothedConf = movingAverage1D(conf, settings.smoothRadius);
   const spans = [];
-
   let inTrace = false;
   let start = -1;
   let highCount = 0;
@@ -215,6 +255,7 @@ function trimTracePathByConfidence(pathY, imageData, foregroundCutoff, roiBounds
   for (let x = 0; x < width; x++) {
     const c = smoothedConf[x];
 
+    // Enter trace state only after a stable high-confidence run.
     if (!inTrace) {
       if (c >= settings.highThreshold) {
         highCount++;
@@ -230,6 +271,7 @@ function trimTracePathByConfidence(pathY, imageData, foregroundCutoff, roiBounds
       continue;
     }
 
+    // Exit trace state only after sustained low-confidence samples.
     if (c <= settings.lowThreshold) {
       lowCount++;
     } else {
@@ -254,6 +296,7 @@ function trimTracePathByConfidence(pathY, imageData, foregroundCutoff, roiBounds
 
   if (spans.length === 0) return pathY;
 
+  // Keep the longest confident run to suppress weak/noisy tails.
   let bestSpan = spans[0];
   for (let i = 1; i < spans.length; i++) {
     if (spans[i].length > bestSpan.length) bestSpan = spans[i];
@@ -325,10 +368,12 @@ function findCenterOfMassTracePath(imageData, foregroundCutoff, roiBounds = null
       predictedY = prev;
     }
 
-    const bandRange = getROIBandYRange(predictedY, height, roiBounds, settings.bandHalfWidth);
+    // Prefer local band search around the predicted path for better stability.
+    const bandRange = getROIYRange(height, roiBounds, predictedY, settings.bandHalfWidth);
     let yEstimate = computeColumnCOM(x, bandRange.yMin, bandRange.yMax);
     if (!Number.isFinite(yEstimate)) {
-      const fullRange = getROIFullYRange(roiBounds, height);
+      // Fall back to the full allowed Y range if the local band has no valid foreground.
+      const fullRange = getROIYRange(height, roiBounds);
       yEstimate = computeColumnCOM(x, fullRange.yMin, fullRange.yMax);
     }
 
@@ -406,37 +451,3 @@ function zeroAndCenterWaveform(waveform) {
   }
 }
 
-// Main entry: extract a normalized waveform from processed image data.
-export function extractWaveformFromImageData(imageData, options = {}) {
-  if (!imageData || !Number.isFinite(imageData.width) || !Number.isFinite(imageData.height)) {
-    return null;
-  }
-
-  const { width, height } = imageData;
-  if (width <= 0 || height <= 0) return null;
-
-  const foregroundCutoff = Number.isFinite(options.foregroundCutoff)
-    ? options.foregroundCutoff
-    : DEFAULT_FOREGROUND_CUTOFF;
-
-  const roiBounds = normalizeROI(options.roi || null, width, height);
-
-  const rawTracePath = findCenterOfMassTracePath(imageData, foregroundCutoff, roiBounds);
-  const tracePath = trimTracePathByConfidence(rawTracePath, imageData, foregroundCutoff, roiBounds);
-
-  const waveform = new Float32Array(width);
-  for (let x = 0; x < width; x++) {
-    if (!isXInROI(x, roiBounds)) {
-      waveform[x] = NaN;
-      continue;
-    }
-
-    const yPos = tracePath[x];
-    waveform[x] = yPos >= 0 ? 1 - (yPos / height) * 2 : NaN;
-  }
-
-  interpolateWaveform(waveform);
-  zeroAndCenterWaveform(waveform);
-
-  return waveform;
-}

@@ -15,53 +15,101 @@
 
     <!-- Camera Panel -->
     <div class="panel">
-      <h2>Camera Input <small></small></h2>
-      <div class="video-wrapper">
-        <video id="video" autoplay playsinline></video>
-        <canvas id="processingCanvas"></canvas>
-      </div>
-      <div class="controls">
-        <!-- Primary action starts/stops camera; secondary controls appear while active -->
-        <button id="startCamera">Start Camera</button>
-        <div id="cameraControls" class="hidden">
-          <button id="captureFrame">Capture Frame</button>
-          <button id="resetROI">Reset ROI</button>
-          <div class="camera-select-row">
-            <button id="cameraToggle">Front</button>
-          </div>
-          <div class="roi-controls">
-            <!-- ROI sliders define the rectangular capture region in percentages -->
-            <div class="roi-row">
-              <label>Top <input id="roiTop" type="range" min="0" max="80" value="20"> <span id="roiTopVal">20%</span></label>
-              <label>Bottom <input id="roiBottom" type="range" min="20" max="100" value="80"> <span id="roiBottomVal">80%</span></label>
+      <h2>Controls</h2>
+      <div class="camera-card debug-panel">
+        <h3>Camera</h3>
+        <div class="video-wrapper">
+          <video id="video" autoplay playsinline></video>
+          <canvas id="processingCanvas"></canvas>
+        </div>
+        <div class="controls">
+          <!-- Primary action starts/stops camera; secondary controls appear while active -->
+          <button id="startCamera">Start Camera</button>
+          <div id="cameraControls" class="hidden">
+            <button id="captureFrame">Capture Frame</button>
+            <button id="resetROI">Reset ROI</button>
+            <div class="camera-select-row">
+              <button id="cameraToggle">Front</button>
             </div>
-            <div class="roi-row">
-              <label>Left <input id="roiLeft" type="range" min="0" max="90" value="0"> <span id="roiLeftVal">0%</span></label>
-              <label>Right <input id="roiRight" type="range" min="10" max="100" value="100"> <span id="roiRightVal">100%</span></label>
+            <div class="roi-controls">
+              <!-- ROI sliders define the rectangular capture region in percentages -->
+              <div class="roi-row">
+                <label>Top <input id="roiTop" type="range" min="0" max="80" value="20"> <span id="roiTopVal">20%</span></label>
+                <label>Bottom <input id="roiBottom" type="range" min="20" max="100" value="80"> <span id="roiBottomVal">80%</span></label>
+              </div>
+              <div class="roi-row">
+                <label>Left <input id="roiLeft" type="range" min="0" max="90" value="0"> <span id="roiLeftVal">0%</span></label>
+                <label>Right <input id="roiRight" type="range" min="10" max="100" value="100"> <span id="roiRightVal">100%</span></label>
+              </div>
             </div>
           </div>
         </div>
       </div>
-    </div>
 
-    <!-- Waveform Panel -->
-    <div class="panel">
-      <h2>Synthesized Waveform <small></small></h2>
-      <canvas id="waveformCanvas"></canvas>
-      <!-- Web Audio transport -->
-      <div class="controls audio-controls">
-        <button id="playSynth">Play</button>
+      <div id="testSignalPanel" class="debug-panel">
+        <h3>Test Signal</h3>
+        <div class="test-signal-controls">
+          <div class="test-signal-field">
+            <label for="testSignalType">Waveform</label>
+            <select id="testSignalType">
+              <option value="sine" selected>Sine</option>
+              <option value="cosine">Cosine</option>
+            </select>
+          </div>
+
+          <div class="test-signal-field">
+            <label for="testSignalPeriods">Periods</label>
+            <input id="testSignalPeriods" type="number" min="0.5" max="64" step="0.5" value="1" />
+          </div>
+
+          <button id="testSignal">Generate Test Signal</button>
+        </div>
       </div>
-      <!-- Extraction quality metrics from current capture -->
-      <div id="debugPanel" class="debug-panel">
-        <h3>Extraction Debug</h3>
-        <div id="debugCompare">Capture a frame for synthesis metrics.</div>
-      </div>
+
       <!-- Pixel-level view of the ROI used by extraction -->
       <div id="processedPreviewPanel" class="debug-panel">
         <h3>Processed Frame</h3>
         <canvas id="processedPreviewCanvas"></canvas>
       </div>
+    </div>
+
+    <!-- Right Column: waveform panel above analysis panel -->
+    <div class="right-column">
+        <div class="panel">
+        <h2>Analysis</h2>
+          <div class="waveform-card">
+            <h3>Synthesized Waveform</h3>
+            <div class="waveform-wrapper">
+              <div id="waveformPeriodNote" class="waveform-period-note">Period: 10 ms</div>
+              <canvas id="waveformCanvas"></canvas>
+            </div>
+            <div class="controls audio-controls">
+              <div class="audio-primary-controls">
+                <button id="playSynth">Play</button>
+                <label for="waveformPeriodMs">Panel Period (ms)</label>
+                <input id="waveformPeriodMs" type="number" min="1" max="200" step="0.5" value="10" />
+              </div>
+            </div>
+        </div>
+
+          <!-- Spectrum view from the current synthesized wavetable -->
+          <div id="spectrumPanel" class="debug-panel">
+            <h3>Frequency Spectrum</h3>
+            <div class="spectrum-controls">
+              <label for="spectrumScale">Scale</label>
+              <select id="spectrumScale">
+                <option value="linear" selected>Linear</option>
+                <option value="log">Log</option>
+              </select>
+            </div>
+            <canvas id="spectrumCanvas"></canvas>
+          </div>
+          <!-- Extraction quality metrics from current capture -->
+          <div id="debugPanel" class="debug-panel">
+            <h3>Extraction Debug</h3>
+            <div id="debugCompare">Capture a frame for synthesis metrics.</div>
+          </div>
+        </div>
     </div>
 
   </div>
