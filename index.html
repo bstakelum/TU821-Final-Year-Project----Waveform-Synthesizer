@@ -45,7 +45,7 @@
           </div>
         </div>
       </div>
-
+      <!--Test signal generation panel for debugging and demonstration purposes.-->
       <div id="testSignalPanel" class="debug-panel">
         <h3>Test Signal</h3>
         <div class="test-signal-controls">
@@ -54,6 +54,9 @@
             <select id="testSignalType">
               <option value="sine" selected>Sine</option>
               <option value="cosine">Cosine</option>
+              <option value="square">Square</option>
+              <option value="triangle">Triangle</option>
+              <option value="sawtooth">Sawtooth</option>
             </select>
           </div>
 
@@ -64,12 +67,6 @@
 
           <button id="testSignal">Generate Test Signal</button>
         </div>
-      </div>
-
-      <!-- Pixel-level view of the ROI used by extraction -->
-      <div id="processedPreviewPanel" class="debug-panel">
-        <h3>Processed Frame</h3>
-        <canvas id="processedPreviewCanvas"></canvas>
       </div>
     </div>
 
@@ -88,6 +85,7 @@
                 <button id="playSynth">Play</button>
                 <label for="waveformPeriodMs">Panel Period (ms)</label>
                 <input id="waveformPeriodMs" type="number" min="1" max="200" step="0.5" value="10" />
+                <button id="downloadWaveform" style="margin-top:8px;">Download Waveform (.csv)</button>
               </div>
             </div>
         </div>
@@ -103,11 +101,6 @@
               </select>
             </div>
             <canvas id="spectrumCanvas"></canvas>
-          </div>
-          <!-- Extraction quality metrics from current capture -->
-          <div id="debugPanel" class="debug-panel">
-            <h3>Extraction Debug</h3>
-            <div id="debugCompare">Capture a frame for synthesis metrics.</div>
           </div>
         </div>
     </div>

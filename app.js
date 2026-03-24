@@ -1,30 +1,54 @@
+// --- Download Waveform Button Logic (must run after synthEngine is created) ---
+window.addEventListener('DOMContentLoaded', () => {
+  const downloadWaveformButton = document.getElementById('downloadWaveform');
+  if (downloadWaveformButton && synthEngine) {
+    function updateDownloadButtonState() {
+      const length = synthEngine.getPreparedWavetableLength?.() ?? 0;
+      downloadWaveformButton.disabled = length === 0;
+    }
+    downloadWaveformButton.addEventListener('click', () => {
+      const length = synthEngine.getPreparedWavetableLength?.() ?? 0;
+      if (length > 0 && synthEngine.exportWaveformToCSV) {
+        synthEngine.exportWaveformToCSV(
+          synthEngine.preparedWavetable || null,
+          'waveform.csv'
+        );
+      }
+    });
+    // Patch updateWaveform to also update button state
+    const origUpdateWaveform = synthEngine.updateWaveform;
+    synthEngine.updateWaveform = function(waveform) {
+      origUpdateWaveform.call(this, waveform);
+      updateDownloadButtonState();
+    };
+    // Initial state
+    updateDownloadButtonState();
+  }
+});
 // Main app orchestrator:
 // - wires camera capture, image preprocessing, waveform extraction, drawing, and synthesis
 // - handles test-signal generation and panel-period UI controls
-// - updates extraction debug text with source/wavetable/ROI/stream details
 import { createCameraController } from './cameraController.js';
 import { createImageProcessor } from './imageProcessing.js';
 import { extractWaveformFromImageData } from './waveformExtractor.js';
 import { createSynthAudioEngine } from './audioEngine.js';
-
+// UI elements
 const waveformCanvas = document.getElementById('waveformCanvas');
 const wctx = waveformCanvas.getContext('2d');
 const waveformPeriodNoteEl = document.getElementById('waveformPeriodNote');
 const waveformPeriodInput = document.getElementById('waveformPeriodMs');
 const spectrumCanvas = document.getElementById('spectrumCanvas');
 const processingCanvas = document.getElementById('processingCanvas');
-const processedPreviewCanvas = document.getElementById('processedPreviewCanvas');
-const debugCompareEl = document.getElementById('debugCompare');
 const spectrumScaleSelect = document.getElementById('spectrumScale');
 const testSignalButton = document.getElementById('testSignal');
 const testSignalTypeSelect = document.getElementById('testSignalType');
 const testSignalPeriodsInput = document.getElementById('testSignalPeriods');
 
-const waveformForegroundCutoff = 200;
-const DEFAULT_STARTUP_WIDTH = 1024;
-const DEFAULT_STARTUP_HEIGHT = 768;
+const waveformForegroundCutoff = 200; // Pixel intensity cutoff for waveform extraction (0-255, lower = more aggressive)
+const DEFAULT_STARTUP_WIDTH = 640;
+const DEFAULT_STARTUP_HEIGHT = 480;
 const DEFAULT_STARTUP_ASPECT = DEFAULT_STARTUP_HEIGHT / DEFAULT_STARTUP_WIDTH;
-
+// Create the synthesis engine, which will handle audio playback and spectrum visualization.
 const synthEngine = createSynthAudioEngine({
   playButton: document.getElementById('playSynth'),
   spectrumCanvas,
@@ -40,11 +64,9 @@ requestAnimationFrame(() => {
   const syncedSize = getStartupCanvasSize();
   initializeCanvasSizes(syncedSize.width, syncedSize.height);
 });
-
-const imageProcessor = createImageProcessor({
-  previewCanvas: processedPreviewCanvas,
-});
-
+// Create the image processor, which will handle all preprocessing steps to clean up the captured image before extraction.
+const imageProcessor = createImageProcessor({});
+// Create the camera controller, which will handle video capture and ROI selection.
 const cameraController = createCameraController({
   video: document.getElementById('video'),
   processingCanvas,
@@ -70,7 +92,7 @@ const cameraController = createCameraController({
 });
 
 cameraController.init();
-
+// Handle UI interactions for spectrum scale and test signal generation.
 if (spectrumScaleSelect) {
   spectrumScaleSelect.addEventListener('change', (event) => {
     synthEngine.setSpectrumScale(event.target.value);
@@ -108,11 +130,6 @@ function initializeCanvasSizes(width, height) {
   if (processingCanvas) {
     processingCanvas.width = safeWidth;
     processingCanvas.height = safeHeight;
-  }
-
-  if (processedPreviewCanvas) {
-    processedPreviewCanvas.width = safeWidth;
-    processedPreviewCanvas.height = safeHeight;
   }
 }
 
@@ -159,7 +176,7 @@ function getStartupCanvasSize() {
 function handleTestSignalClick() {
   const sampleCount = Math.max(512, waveformCanvas.width || 1024);
 
-  const waveformType = testSignalTypeSelect?.value === 'cosine' ? 'cosine' : 'sine';
+  const waveformType = testSignalTypeSelect?.value || 'sine';
   const baseCycles = clampNumber(testSignalPeriodsInput?.value, 0.5, 64, 1);
 
   const testWaveform = createTestWaveform(sampleCount, {
@@ -169,40 +186,8 @@ function handleTestSignalClick() {
   });
 
   synthEngine.updateWaveform(testWaveform);
-  updateExtractionDebugWavetableInfo(testWaveform.length, null, null);
+  
   drawWaveform(testWaveform);
-}
-
-function updateExtractionDebugWavetableInfo(sourceLength, roi, imageDataLength) {
-  if (!debugCompareEl) return;
-
-  const wavetableLength = synthEngine.getPreparedWavetableLength?.() ?? 0;
-  const imageDataText = Number.isFinite(imageDataLength)
-    ? ` | imageData length ${imageDataLength}`
-    : '';
-  const roiText = roi
-    ? ` | ROI ${roi.width}x${roi.height}`
-    : '';
-  const cameraSettingsText = getCameraSettingsDebugText();
-
-  debugCompareEl.textContent = `Extraction Debug: source length ${sourceLength} samples | prepared wavetable length ${wavetableLength} samples${imageDataText}${roiText}${cameraSettingsText}`;
-}
-
-function getCameraSettingsDebugText() {
-  const settings = cameraController.getCurrentVideoTrackSettings?.();
-  if (!settings) return '';
-
-  const width = Number.isFinite(settings.width) ? settings.width : null;
-  const height = Number.isFinite(settings.height) ? settings.height : null;
-  const fps = Number.isFinite(settings.frameRate) ? settings.frameRate : null;
-
-  const sizeText = width && height ? `${width}x${height}` : null;
-  const fpsText = fps ? `${Math.round(fps)}fps` : null;
-
-  if (!sizeText && !fpsText) return '';
-  if (sizeText && fpsText) return ` | Stream ${sizeText} @ ${fpsText}`;
-  if (sizeText) return ` | Stream ${sizeText}`;
-  return ` | Stream ${fpsText}`;
 }
 
 // Build a fundamental test waveform over the panel sample space.
@@ -213,12 +198,32 @@ function createTestWaveform(length, {
 } = {}) {
   const out = new Float32Array(length);
   const safeCycles = Math.max(0.1, Number(baseCycles) || 1);
-  const useCosine = waveformType === 'cosine';
 
   for (let i = 0; i < length; i++) {
     const t = i / length;
     const angle = 2 * Math.PI * safeCycles * t;
-    out[i] = useCosine ? Math.cos(angle) : Math.sin(angle);
+    let value = 0;
+
+    switch (waveformType) {
+      case 'cosine':
+        value = Math.cos(angle);
+        break;
+      case 'square':
+        value = Math.sign(Math.sin(angle));
+        break;
+      case 'triangle':
+        value = (2 / Math.PI) * Math.asin(Math.sin(angle));
+        break;
+      case 'sawtooth':
+        value = (2 / Math.PI) * Math.atan(Math.tan(angle / 2));
+        break;
+      case 'sine':
+      default:
+        value = Math.sin(angle);
+        break;
+    }
+
+    out[i] = value;
   }
 
   // Normalize to a predictable peak level for stable playback loudness.
@@ -252,8 +257,6 @@ function processCapturedImage(imageData, roi) {
     return;
   }
 
-  imageProcessor.renderProcessedPreview(processedImageData);
-
   const waveform = extractWaveformFromImageData(processedImageData, {
     foregroundCutoff: waveformForegroundCutoff,
     roi,
@@ -264,7 +267,6 @@ function processCapturedImage(imageData, roi) {
   }
 
   synthEngine.updateWaveform(waveform);
-  updateExtractionDebugWavetableInfo(waveform.length, roi, imageData?.data?.length);
   drawWaveform(waveform);
 }
 
@@ -293,7 +295,6 @@ function drawWaveform(waveform) {
 
     const x = (i / xDenominator) * (plotWidth - 1);
     const y = ((1 - (value + 1) / 2)) * plotHeight;
-
     if (!isDrawing) {
       wctx.beginPath();
       wctx.moveTo(x, y);

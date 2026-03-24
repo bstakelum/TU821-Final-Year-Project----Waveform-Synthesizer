@@ -98,6 +98,17 @@ export function createCameraController({
       const stream = await getPreferredCameraStream();
       currentStream = stream;
       video.srcObject = stream;
+
+      // Log actual camera resolution for debugging
+      const track = stream.getVideoTracks()[0];
+      const settings = track.getSettings();
+      console.log('Camera resolution:', {
+        width: settings.width,
+        height: settings.height,
+        frameRate: settings.frameRate,
+        facingMode: settings.facingMode
+      });
+
       startOverlayLoop();
       if (cameraControls) cameraControls.classList.remove('hidden');
       if (startButton) startButton.textContent = 'Stop Camera';
@@ -123,7 +134,7 @@ export function createCameraController({
     if (video.readyState < 2 || captureCanvas.width === 0 || captureCanvas.height === 0) {
       return null;
     }
-
+    // Draw the current video frame to an offscreen canvas and extract the pixel data.
     cctx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
     const imageData = cctx.getImageData(0, 0, captureCanvas.width, captureCanvas.height);
     const roi = computeROI();
@@ -270,6 +281,24 @@ export function createCameraController({
     const facing = preferredFacing || 'user';
 
     const attempts = [
+      // Try high resolution first
+      { 
+        video: { 
+          facingMode: { exact: facing },
+          width: { ideal: 1920, min: 1280 },
+          height: { ideal: 1080, min: 720 }
+        }, 
+        audio: false 
+      },
+      { 
+        video: { 
+          facingMode: { ideal: facing },
+          width: { ideal: 1920, min: 1280 },
+          height: { ideal: 1080, min: 720 }
+        }, 
+        audio: false 
+      },
+      // Fallback to any resolution
       { video: { facingMode: { exact: facing } }, audio: false },
       { video: { facingMode: { ideal: facing } }, audio: false },
       { video: true, audio: false },

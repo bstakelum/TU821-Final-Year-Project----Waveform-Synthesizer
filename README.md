@@ -10,9 +10,10 @@ It was built as part of the TU821 Honours Degree in Electrical and Electronic En
 - Camera capture with front/back toggle and ROI selection.
 - Image preprocessing pipeline with processed-frame preview.
 - Waveform extraction with confidence-based trimming and gap filling.
-- Test signal generator (sine/cosine, configurable periods).
+- Test signal generator (sine/cosine/square/triangle, configurable periods).
 - Wavetable playback with adjustable panel period (ms).
 - Frequency spectrum view with linear/log scale and dominant-frequency label.
+- Option to download wavetable to CSV file.
 
 ## Project Files
 
@@ -33,15 +34,16 @@ It was built as part of the TU821 Honours Degree in Electrical and Electronic En
 5. Trim weak/noisy parts at the start and end of the path.
 6. Fill short gaps, center the waveform, and draw it to the waveform panel.
 7. Send the waveform data to the audio module.
+8. Optional download of prepared wavetable to CSV file
 
 ## Audio Synthesis
 
 The audio module plays the waveform as a looping wavetable tone.
 The loop period is user-adjustable via the Panel Period (ms) input in the waveform panel.
 
-- Non-numeric waveform points are sanitized.
+- Non-numeric waveform points are removed and zeroed.
 - DC offset is removed before playback.
-- Lower-resolution waveforms are optionally upsampled to an integer multiple, capped by `MAX_INTERPOLATED_SAMPLES`.
+- Waveform is upsampled to 16-bit sample array with linear interpolation.
 - The wavetable loops continuously, and playback rate is adjusted to match the selected panel period.
 
 ### What You Should Hear
@@ -63,7 +65,6 @@ The loop period is user-adjustable via the Panel Period (ms) input in the wavefo
 - flattenKernelRadius: how large the local background estimate is.
 - flattenBias: brightness offset after lighting flattening.
 - contrastLowPercentile / contrastHighPercentile: contrast stretch range.
-- ADAPTIVE_THRESHOLD_PERCENTILE: threshold strength for black/white mask creation.
 - minIsolatedNeighborCount: how aggressively tiny noise dots are removed.
 - erodeMinForegroundCount: how strongly thin mask areas are cleaned.
 

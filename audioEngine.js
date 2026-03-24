@@ -1,13 +1,13 @@
 // Audio engine:
-// - runs wavetable playback with play/stop controls and gain envelope
-// - prepares extracted waveforms for synthesis (DC removal + optional upsampling)
-// - renders a Goertzel-based spectrum with dense peak-frequency estimation
+// - runs wavetable playback with play/stop controls
+// - prepares extracted waveforms for synthesis (DC removal + upsampling)
+// - renders a Goertzel-based spectrum
 // Build and return the audio controller used by the app.
 export function createSynthAudioEngine({
   playButton,
   spectrumCanvas,
 }) {
-  const MAX_INTERPOLATED_SAMPLES = 1920;
+  const MAX_INTERPOLATED_SAMPLES = 65536; // 16-bit audio buffer size for high-quality resampling
   // Default loop period for one complete wavetable cycle (user-adjustable from UI).
   const DEFAULT_PANEL_DURATION_SECONDS = 0.01;
   const MIN_PANEL_DURATION_SECONDS = 0.001;
@@ -33,13 +33,13 @@ export function createSynthAudioEngine({
 
   // Main process flow API.
   function updateWaveform(waveform) {
-    prepareWaveformForSynthesis(waveform || null);
+    prepareWaveformForSynthesis(waveform);
 
     if (!preparedWavetable || preparedWavetable.length === 0) {
       return;
     }
   }
-
+  // Adjust the loop frequency of the wavetable playback based on the desired panel duration.
   function setPanelDurationSeconds(seconds) {
     panelDurationSeconds = sanitizePanelDurationSeconds(seconds);
 
@@ -75,7 +75,7 @@ export function createSynthAudioEngine({
     isActive = true;
     if (playButton) playButton.textContent = 'Stop';
   }
-
+  // Set the spectrum display mode (linear or logarithmic) and redraw the spectrum if needed.
   function setSpectrumScale(mode) {
     spectrumScale = mode === 'log' ? 'log' : 'linear';
     if (preparedWavetable) {
@@ -122,9 +122,30 @@ export function createSynthAudioEngine({
     setSpectrumScale,
     setPanelDurationSeconds,
     getPanelDurationSeconds: () => panelDurationSeconds,
-    getPreparedWavetableLength: () => (preparedWavetable ? preparedWavetable.length : 0),
+    getPreparedWavetableLength: () => (preparedWavetable ? preparedWavetable.length : 0),    startAudio,
+    stopAudio,    exportWaveformToCSV,
+    get preparedWavetable() { return preparedWavetable; },
   };
-
+  // Export a waveform array as a CSV file for MATLAB compatibility
+  function exportWaveformToCSV(waveform, filename = 'waveform.csv') {
+    if (!Array.isArray(waveform) && !(waveform instanceof Float32Array) && !(waveform instanceof Float64Array)) {
+      console.error('exportWaveformToCSV: Input is not an array');
+      return;
+    }
+    const csvContent = waveform.map(x => x.toString()).join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 100);
+  }
+  // Sanitize and clamp the panel duration seconds to a reasonable range to prevent extreme playback speeds.
   function sanitizePanelDurationSeconds(value) {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return DEFAULT_PANEL_DURATION_SECONDS;
@@ -151,7 +172,7 @@ export function createSynthAudioEngine({
 
     return hasFinite ? out : null;
   }
-
+  // Remove DC offset from the waveform by subtracting the mean value, centering it around zero for better synthesis quality.
   function removeDcOffset(waveform) {
     let sum = 0;
     for (let i = 0; i < waveform.length; i++) {
@@ -165,7 +186,7 @@ export function createSynthAudioEngine({
 
     return waveform;
   }
-
+  // Resample the input waveform to the target length using linear interpolation, ensuring consistent quality and better looped playback.
   function resampleToLength(waveform, targetLength) {
     if (!waveform || waveform.length <= 0 || targetLength <= 0) {
       return null;
@@ -195,15 +216,9 @@ export function createSynthAudioEngine({
   function getTargetWavetableLength(sourceLength) {
     if (!Number.isFinite(sourceLength) || sourceLength <= 0) return 0;
 
-    // Keep high-resolution captures unchanged; only upsample smaller waveforms.
-    if (sourceLength >= MAX_INTERPOLATED_SAMPLES) {
-      return sourceLength;
-    }
-
-    const multiplier = Math.max(1, Math.floor(MAX_INTERPOLATED_SAMPLES / sourceLength));
-    return sourceLength * multiplier;
+    return Math.max(sourceLength, MAX_INTERPOLATED_SAMPLES);
   }
-
+  // Ensure the audio context and master gain node are created and connected properly for synthesis playback.
   function ensureAudioEngine() {
     if (!audioContext) {
       audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -228,7 +243,7 @@ export function createSynthAudioEngine({
     }
     return minHz + (maxHz - minHz) * ratio;
   }
-
+  // Build a Hann window of the specified length for spectral analysis, which helps reduce spectral leakage and provides smoother magnitude estimates.
   function buildHannWindow(length) {
     const out = new Float32Array(length);
     if (length <= 1) {
@@ -240,7 +255,7 @@ export function createSynthAudioEngine({
     }
     return out;
   }
-
+  // Compute the magnitude of a specific frequency component in the signal using the Goertzel algorithm, which is efficient for single-bin analysis and works well for our use case of estimating dominant frequencies in the extracted waveform.
   function goertzelMagnitude(signal, window, frequencyHz, sampleRateHz) {
     const n = signal.length;
     const omega = (2 * Math.PI * frequencyHz) / sampleRateHz;
@@ -258,7 +273,7 @@ export function createSynthAudioEngine({
     const power = sPrev2 * sPrev2 + sPrev * sPrev - coeff * sPrev * sPrev2;
     return Math.sqrt(Math.max(0, power)) / n;
   }
-
+  // Estimate the dominant frequency in the signal by performing a coarse search over the specified frequency range, followed by a finer search around the best candidate. This two-stage approach balances accuracy and computational efficiency for real-time spectrum visualization.
   function estimateDominantFrequency(signal, window, sampleRateHz, minHz, maxHz) {
     if (!signal || signal.length < 4 || maxHz <= minHz) {
       return minHz;
@@ -301,7 +316,7 @@ export function createSynthAudioEngine({
 
     return refinedHz;
   }
-
+  // Render a spectrum visualization of the waveform on the canvas using Goertzel-based magnitude estimates for a set of frequency bins, along with axes, labels, and a peak frequency indicator. The spectrum is displayed in either linear or logarithmic scale based on user selection.
   function drawSpectrumFromWaveform(waveform) {
     if (!spectrumCanvas || !spectrumCtx || !waveform || waveform.length < 4) {
       clearSpectrumCanvas();
@@ -426,7 +441,7 @@ export function createSynthAudioEngine({
     spectrumCtx.fillText('Frequency (Hz)', plotX + plotWidth * 0.5, height - 1);
     spectrumCtx.textAlign = 'left';
   }
-
+  // Prepare the extracted waveform for synthesis by ensuring it's finite, removing DC offset, and resampling to a consistent length for better playback quality. Then update the spectrum visualization based on the prepared wavetable.
   function prepareWaveformForSynthesis(waveform) {
     const finiteWaveform = toFiniteWaveform(waveform);
     if (!finiteWaveform) {
@@ -485,7 +500,7 @@ export function createSynthAudioEngine({
     activeSourceNode = source;
     return true;
   }
-
+  // Stop the synthesis playback with a smooth release envelope to avoid clicks, and clean up the source node after it finishes.
   function stopCustomSynthesis() {
     if (!audioContext || !masterGainNode) return;
     if (!activeSourceNode) return;
