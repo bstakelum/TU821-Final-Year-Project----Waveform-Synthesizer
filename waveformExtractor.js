@@ -1,40 +1,40 @@
 // Waveform extractor:
-// - tracks the waveform trace across columns using center-of-mass scoring
-// - trims weak/noisy edges with confidence hysteresis
-// - fills short gaps and recenters output for synthesis
+// - follows the waveform line across the image
+// - trims weak or noisy ends
+// - fills short gaps and centers the result for playback
 
 const DEFAULT_FOREGROUND_CUTOFF = 200;
 
 const TRIM_CONFIDENCE_CONFIG = {
-  confWindowRadius: 1, // Radius for local foreground density calculation (larger = more smoothing, but slower)
-  smoothRadius: 4, // Radius for moving average smoothing of confidence scores (larger = more smoothing, but slower)
-  highThreshold: 0.52, // Confidence threshold to consider a column as strong foreground (0-1, higher = more aggressive trimming)
-  lowThreshold: 0.34, // Confidence threshold to consider a column as weak foreground (0-1, lower = more aggressive trimming)
-  enterRun: 8, // Number of consecutive columns above highThreshold to enter trace state (higher = more aggressive trimming)
-  exitRun: 4, // Number of consecutive columns below lowThreshold to exit trace state (higher = more aggressive trimming)
-  minSpanColumnsRatio: 0.10, // Minimum ratio of total columns for a valid trace span (0-1, higher = more aggressive trimming)
-  minSpanColumnsFloor: 8, // Minimum number of columns for a valid trace span (prevents over-trimming on narrow ROIs)
-  continuityMaxDelta: 12, // Maximum allowed Y jump between adjacent columns for good continuity (in pixels, lower = more aggressive trimming)
-  minKeepValidColumnsRatio: 0.06, // Minimum ratio of valid columns to keep (0-1, higher = more aggressive trimming)
-  minKeepValidColumnsFloor: 8, // Minimum number of valid columns to keep (prevents over-trimming on narrow ROIs)
+  confWindowRadius: 1, // Nearby area used when judging whether a column looks reliable.
+  smoothRadius: 4, // Smooths the confidence score so trimming is less jumpy.
+  highThreshold: 0.52, // Score needed to confidently enter the waveform.
+  lowThreshold: 0.34, // Score that marks the waveform as getting too weak.
+  enterRun: 8, // How many strong columns are needed before keeping a run.
+  exitRun: 4, // How many weak columns end a run.
+  minSpanColumnsRatio: 0.10, // Small runs below this fraction are ignored.
+  minSpanColumnsFloor: 8, // Minimum run length for narrow selections.
+  continuityMaxDelta: 12, // Largest jump allowed between nearby columns.
+  minKeepValidColumnsRatio: 0.06, // Stop trimming if too little of the waveform would remain.
+  minKeepValidColumnsFloor: 8, // Minimum number of kept columns.
 };
 
 const CENTER_OF_MASS_CONFIG = {
-  bandHalfWidth: 14, // Half-width of local search band around predicted path (in pixels, lower = more aggressive but less stable)
-  bandHalfHeight: 10, // Half-height of local search band for foreground counting (in pixels, lower = more aggressive but less stable)
-  minForegroundCount: 5, // Minimum number of foreground pixels in the local band to consider a valid trace point (higher = more aggressive)
-  maxJumpPx: 12, // Maximum allowed Y jump between adjacent columns for valid trace points (in pixels, lower = more aggressive)
-  strongBandCount: 30, // Minimum number of foreground pixels in the local band to consider it a strong band (higher = more aggressive, but more stable path tracking)
-  maxJumpForStrongBandPx: 18, // Maximum allowed Y jump between adjacent columns when in a strong band (in pixels, lower = more aggressive)
-  medianRadius: 3, // Radius for median filtering of the raw path (in pixels, lower = less smoothing, but more noise)
-  bufferCommitThreshold: 5, // Number of consecutive valid points needed to commit to the path (higher = more aggressive, but more stable tracking)
+  bandHalfWidth: 14, // Search width around the predicted line position.
+  bandHalfHeight: 10, // Height used when counting bright pixels around the line.
+  minForegroundCount: 5, // Minimum bright pixels needed to accept a point.
+  maxJumpPx: 12, // Largest allowed vertical jump between columns.
+  strongBandCount: 30, // Bright-pixel count that marks a column as a strong section.
+  maxJumpForStrongBandPx: 18, // Strong sections are allowed a slightly larger jump.
+  medianRadius: 3, // Smooths the detected path.
+  bufferCommitThreshold: 5, // Requires a short stable run before locking onto the path.
 };
 
 const WAVEFORM_POSTPROCESSING_CONFIG = {
-  interpolationMaxGap: 20, // Maximum gap size (in samples) to fill with linear interpolation (higher = more aggressive filling, but risk of smoothing sharp features)
+  interpolationMaxGap: 20, // Largest missing gap that will be filled in.
 };
 
-// Main entry: extract a normalized waveform from processed image data.
+// Main entry point: turn the processed image into a normalized waveform.
 export function extractWaveformFromImageData(imageData, options = {}) {
   if (!imageData || !Number.isFinite(imageData.width) || !Number.isFinite(imageData.height)) {
     return null;
@@ -49,7 +49,7 @@ export function extractWaveformFromImageData(imageData, options = {}) {
 
   const roiBounds = normalizeROI(options.roi || null, width, height);
 
-  // 1) Detect trace path, then trim low-confidence edges.
+  // Find the line, then trim weak sections from the ends.
   const rawTracePath = findCenterOfMassTracePath(imageData, foregroundCutoff, roiBounds);
   const tracePath = trimTracePathByConfidence(rawTracePath, imageData, foregroundCutoff, roiBounds);
 
@@ -68,19 +68,19 @@ export function extractWaveformFromImageData(imageData, options = {}) {
     waveform[x] = yPos >= 0 ? 1 - ((yPos - normYMin) / normYSpan) * 2 : NaN;
   }
 
-  // 2) Fill short gaps and center around zero for stable playback.
+  // Fill short gaps and center the waveform around zero.
   interpolateWaveform(waveform);
   zeroAndCenterWaveform(waveform);
 
   return waveform;
 }
 
-// Keep a number inside a min/max range.
+// Keep a number inside a fixed range.
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-// Find kth smallest element in array using quickselect
+// Find the kth smallest value without fully sorting the array.
 function quickselect(arr, k) {
   function partition(left, right, pivotIdx) {
     const pivot = arr[pivotIdx];
@@ -106,7 +106,7 @@ function quickselect(arr, k) {
   return arr[k] || 0;
 }
 
-// Count how many path points are valid.
+// Count how many points in the path were successfully found.
 function countValidPathPoints(pathY) {
   let count = 0;
   for (let i = 0; i < pathY.length; i++) {
@@ -115,7 +115,7 @@ function countValidPathPoints(pathY) {
   return count;
 }
 
-// Measure how much of a local area is bright foreground.
+// Measure how much of a nearby area looks like foreground.
 function getForegroundDensity(imageData, x, y, radiusX, radiusY, cutoff) {
   const { width, height, data } = imageData;
   let foreground = 0;
@@ -133,7 +133,7 @@ function getForegroundDensity(imageData, x, y, radiusX, radiusY, cutoff) {
 
   return total > 0 ? foreground / total : 0;
 }
-// Count how many foreground pixels are in a vertical band around the current point, which helps determine if it's a strong signal area for more lenient tracking.
+// Count bright pixels in a vertical band around the current point.
 function countForegroundInBand(imageData, x, centerY, halfHeight, roiBounds, cutoff) {
   const { width, height, data } = imageData;
   const range = getROIYRange(height, roiBounds, centerY, halfHeight);
@@ -147,7 +147,7 @@ function countForegroundInBand(imageData, x, centerY, halfHeight, roiBounds, cut
   return count;
 }
 
-// Get the median of finite values in a 1D window (uses quickselect for O(n) speed).
+// Get the median in a small window while ignoring invalid values.
 function getMedianOfFiniteWindow(values, start, end, workBuffer) {
   let count = 0;
   for (let i = start; i <= end; i++) {
@@ -161,7 +161,7 @@ function getMedianOfFiniteWindow(values, start, end, workBuffer) {
   return quickselect(workBuffer.subarray(0, count), k);
 }
 
-// Smooth a 1D signal with a median filter that skips invalid values (reuses buffer to avoid allocations).
+// Smooth the path with a median filter while skipping invalid values.
 function medianFilterFinite1D(values, radius, workBuffer) {
   if (radius <= 0) return Float32Array.from(values);
   const output = new Float32Array(values.length);
@@ -176,12 +176,12 @@ function medianFilterFinite1D(values, radius, workBuffer) {
   return output;
 }
 
-// Smooth a 1D signal with a moving average (reuses cumulative sum for faster computation).
+// Smooth a signal with a moving average.
 function movingAverage1D(values, radius) {
   if (radius <= 0) return Float32Array.from(values);
   const out = new Float32Array(values.length);
   
-  // Build cumulative sum for O(1) window queries instead of O(radius) sums each iteration
+  // Build a cumulative sum so each window is fast to read.
   const cumsum = new Float32Array(values.length + 1);
   for (let i = 0; i < values.length; i++) {
     cumsum[i + 1] = cumsum[i] + values[i];
@@ -197,7 +197,7 @@ function movingAverage1D(values, radius) {
   return out;
 }
 
-// Clamp ROI input so it is valid for the current image size.
+// Make sure the ROI fits inside the image.
 function normalizeROI(roi, width, height) {
   if (!roi) return null;
 
@@ -220,12 +220,12 @@ function normalizeROI(roi, width, height) {
   };
 }
 
-// Check whether a column index is inside ROI bounds.
+// Check whether a column lies inside the ROI.
 function isXInROI(x, roiBounds) {
   return !roiBounds || (x >= roiBounds.xMin && x <= roiBounds.xMax);
 }
 
-// Get Y search range, optionally band-limited and clipped to ROI when present.
+// Get the allowed Y search range for the current column.
 function getROIYRange(height, roiBounds, predictedY = null, bandHalfWidth = null) {
   if (!Number.isFinite(predictedY) || !Number.isFinite(bandHalfWidth) || bandHalfWidth < 0) {
     if (!roiBounds) {
@@ -247,7 +247,7 @@ function getROIYRange(height, roiBounds, predictedY = null, bandHalfWidth = null
   };
 }
 
-// Trim weak/noisy start and end sections of the detected path (combines scoring and span detection).
+// Trim weak or noisy sections from the start and end of the path.
 function trimTracePathByConfidence(pathY, imageData, foregroundCutoff, roiBounds = null) {
   const { width } = imageData;
   if (!pathY || pathY.length === 0) return pathY;
@@ -266,7 +266,7 @@ function trimTracePathByConfidence(pathY, imageData, foregroundCutoff, roiBounds
     ),
   };
 
-  // Single pass: compute confidence with moving average simultaneously
+  // Score how reliable each column looks.
   const conf = new Float32Array(width);
   let prevValidY = null;
 
@@ -296,10 +296,10 @@ function trimTracePathByConfidence(pathY, imageData, foregroundCutoff, roiBounds
     prevValidY = y;
   }
 
-  // Apply moving average smoothing
+  // Smooth the confidence scores.
   const smoothedConf = movingAverage1D(conf, settings.smoothRadius);
   
-  // Combine span detection with same loop
+  // Find the strongest continuous span.
   const spans = [];
   let inTrace = false;
   let start = -1;
@@ -309,7 +309,7 @@ function trimTracePathByConfidence(pathY, imageData, foregroundCutoff, roiBounds
   for (let x = 0; x < width; x++) {
     const c = smoothedConf[x];
 
-    // Enter trace state only after a stable high-confidence run.
+    // Only start a trace after a stable run of strong columns.
     if (!inTrace) {
       if (c >= settings.highThreshold) {
         highCount++;
@@ -325,7 +325,7 @@ function trimTracePathByConfidence(pathY, imageData, foregroundCutoff, roiBounds
       continue;
     }
 
-    // Exit trace state only after sustained low-confidence samples.
+    // Only end a trace after several weak columns in a row.
     if (c <= settings.lowThreshold) {
       lowCount++;
     } else {
@@ -350,7 +350,7 @@ function trimTracePathByConfidence(pathY, imageData, foregroundCutoff, roiBounds
 
   if (spans.length === 0) return pathY;
 
-  // Keep the longest confident run to suppress weak/noisy tails.
+  // Keep the longest reliable run.
   let bestSpan = spans[0];
   for (let i = 1; i < spans.length; i++) {
     if (spans[i].length > bestSpan.length) bestSpan = spans[i];
@@ -370,7 +370,7 @@ function trimTracePathByConfidence(pathY, imageData, foregroundCutoff, roiBounds
   return trimmed;
 }
 
-// Track the waveform line across columns using center-of-mass scoring.
+// Follow the waveform line across the image one column at a time.
 function findCenterOfMassTracePath(imageData, foregroundCutoff, roiBounds = null) {
   const { width, height, data } = imageData;
   const pathY = new Float32Array(width);
@@ -383,7 +383,7 @@ function findCenterOfMassTracePath(imageData, foregroundCutoff, roiBounds = null
     foregroundCutoff,
   };
 
-  // Pre-calculate full range once instead of per-column lookup
+  // Pre-calculate the full search range once.
   const fullRange = getROIYRange(height, roiBounds);
   const workBuffer = new Float32Array(2 * settings.medianRadius + 2);
 
@@ -410,13 +410,13 @@ function findCenterOfMassTracePath(imageData, foregroundCutoff, roiBounds = null
     return weightedY / weightSum;
   };
 
-  // Buffering state: accumulate valid candidates until threshold, then commit
+  // Buffer a few good points before committing to a run.
   const tempBuffer = [];
-  let inRun = false;  // True once we've committed buffered points
+  let inRun = false; // True once a stable run has started.
 
   for (let x = 0; x < width; x++) {
     if (!isXInROI(x, roiBounds)) {
-      // Reset buffer at ROI boundary, discard any uncommitted samples
+      // Drop any pending samples when we leave the ROI.
       if (tempBuffer.length > 0 && tempBuffer.length < settings.bufferCommitThreshold) {
         tempBuffer.length = 0;
       }
@@ -433,20 +433,20 @@ function findCenterOfMassTracePath(imageData, foregroundCutoff, roiBounds = null
       predictedY = prev;
     }
 
-    // Prefer local band search around the predicted path for better stability.
+    // First search near the predicted line position.
     const bandRange = getROIYRange(height, roiBounds, predictedY, settings.bandHalfWidth);
     let yEstimate = computeColumnCOM(x, bandRange.yMin, bandRange.yMax);
     if (!Number.isFinite(yEstimate)) {
-      // Fall back to the full allowed Y range if the local band has no valid foreground.
+      // Fall back to the full Y range if the local search fails.
       yEstimate = computeColumnCOM(x, fullRange.yMin, fullRange.yMax);
     }
 
     if (!Number.isFinite(yEstimate)) {
-      // Invalid sample: reset buffer if not in committed run
+      // Invalid sample: clear any unstable run.
       if (!inRun) {
         tempBuffer.length = 0;
       } else {
-        // Already in run; invalid breaks the run
+        // A bad point ends the current run.
         inRun = false;
         tempBuffer.length = 0;
       }
@@ -467,7 +467,7 @@ function findCenterOfMassTracePath(imageData, foregroundCutoff, roiBounds = null
       : settings.maxJumpPx;
 
     if (Number.isFinite(prev) && Math.abs(yEstimate - prev) > allowedJump) {
-      // Invalid due to jump: reset buffer
+      // A large jump also ends the run.
       if (!inRun) {
         tempBuffer.length = 0;
       } else {
@@ -477,10 +477,10 @@ function findCenterOfMassTracePath(imageData, foregroundCutoff, roiBounds = null
       continue;
     }
 
-    // Valid sample: add to buffer
+    // Store the valid sample.
     tempBuffer.push({ x, yValue: yEstimate });
 
-    // Once buffer hits threshold, commit all and continue direct for this run
+    // Once the buffer is stable enough, commit it as part of the path.
     if (tempBuffer.length >= settings.bufferCommitThreshold && !inRun) {
       for (const item of tempBuffer) {
         pathY[item.x] = item.yValue;
@@ -488,12 +488,12 @@ function findCenterOfMassTracePath(imageData, foregroundCutoff, roiBounds = null
       tempBuffer.length = 0;
       inRun = true;
     } else if (inRun) {
-      // Already in run, add directly
+      // Once locked on, write points directly.
       pathY[x] = yEstimate;
     }
   }
 
-  // Direct quantization: median filter with reused buffer, output Int16Array
+  // Smooth the path and round it to pixel positions.
   const quantized = new Int16Array(width);
   const smoothed = medianFilterFinite1D(pathY, settings.medianRadius, workBuffer);
   for (let i = 0; i < width; i++) {
@@ -503,7 +503,7 @@ function findCenterOfMassTracePath(imageData, foregroundCutoff, roiBounds = null
   return quantized;
 }
 
-// Fill short missing gaps between nearby valid waveform points.
+// Fill short missing gaps between nearby points.
 function interpolateWaveform(waveform) {
   const { interpolationMaxGap: maxGap } = WAVEFORM_POSTPROCESSING_CONFIG;
   let i = 0;
@@ -532,7 +532,7 @@ function interpolateWaveform(waveform) {
     }
   }
 }
-// Get the median of finite values in an array (ignores NaNs).
+// Get the median while ignoring missing values.
 function getMedianOfFiniteArray(values) {
   const finiteValues = [];
   for (let i = 0; i < values.length; i++) {
@@ -548,7 +548,7 @@ function getMedianOfFiniteArray(values) {
   return (finiteValues[mid - 1] + finiteValues[mid]) / 2;
 }
 
-// Center waveform around zero and replace invalid points safely.
+// Center the waveform around zero and replace missing points with 0.
 function zeroAndCenterWaveform(waveform) {
   const median = getMedianOfFiniteArray(waveform);
   for (let i = 0; i < waveform.length; i++) {

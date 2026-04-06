@@ -1,4 +1,4 @@
-// --- Download Waveform Button Logic (must run after synthEngine is created) ---
+// Wire up the download button after the page is ready.
 window.addEventListener('DOMContentLoaded', () => {
   const downloadWaveformButton = document.getElementById('downloadWaveform');
   if (downloadWaveformButton && synthEngine) {
@@ -15,28 +15,27 @@ window.addEventListener('DOMContentLoaded', () => {
         );
       }
     });
-    // Patch updateWaveform to also update button state
+    // Keep the button state in sync whenever a new waveform is loaded.
     const origUpdateWaveform = synthEngine.updateWaveform;
     synthEngine.updateWaveform = function(waveform) {
       origUpdateWaveform.call(this, waveform);
       updateDownloadButtonState();
     };
-    // Initial state
+    // Set the button state on first load.
     updateDownloadButtonState();
   }
 });
-// Main app orchestrator:
-// - wires camera capture, image preprocessing, waveform extraction, drawing, and synthesis
-// - handles test-signal generation and panel-period UI controls
+// Main app file. It connects the camera, image cleanup, waveform extraction, drawing, and audio playback.
 import { createCameraController } from './cameraController.js';
 import { createImageProcessor } from './imageProcessing.js';
 import { extractWaveformFromImageData } from './waveformExtractor.js';
 import { createSynthAudioEngine } from './audioEngine.js';
-// UI elements
+// Main UI elements.
 const waveformCanvas = document.getElementById('waveformCanvas');
 const wctx = waveformCanvas.getContext('2d');
 const waveformPeriodNoteEl = document.getElementById('waveformPeriodNote');
 const waveformPeriodInput = document.getElementById('waveformPeriodMs');
+const waveformPeriodValue = document.getElementById('waveformPeriodValue');
 const spectrumCanvas = document.getElementById('spectrumCanvas');
 const processingCanvas = document.getElementById('processingCanvas');
 const spectrumScaleSelect = document.getElementById('spectrumScale');
@@ -44,29 +43,26 @@ const testSignalButton = document.getElementById('testSignal');
 const testSignalTypeSelect = document.getElementById('testSignalType');
 const testSignalPeriodsInput = document.getElementById('testSignalPeriods');
 
-const waveformForegroundCutoff = 200; // Pixel intensity cutoff for waveform extraction (0-255, lower = more aggressive)
+const waveformForegroundCutoff = 200; // Brightness level used to decide what counts as waveform.
 const DEFAULT_STARTUP_WIDTH = 640;
 const DEFAULT_STARTUP_HEIGHT = 480;
-const DEFAULT_STARTUP_ASPECT = DEFAULT_STARTUP_HEIGHT / DEFAULT_STARTUP_WIDTH;
-// Create the synthesis engine, which will handle audio playback and spectrum visualization.
+// Create the audio and spectrum module.
 const synthEngine = createSynthAudioEngine({
   playButton: document.getElementById('playSynth'),
   spectrumCanvas,
 });
 
 const DEFAULT_PANEL_DURATION_SECONDS = 0.01;
+const MIN_PANEL_PERIOD_MS = 1;
+const MAX_PANEL_PERIOD_MS = 15;
 
-// Pre-seed canvas dimensions so layout/aspect looks correct before camera metadata exists.
-const startupSize = getStartupCanvasSize();
-initializeCanvasSizes(startupSize.width, startupSize.height);
+// Give the canvases a sensible size before the camera reports its real size.
+initializeCanvasSizes(DEFAULT_STARTUP_WIDTH, DEFAULT_STARTUP_HEIGHT);
 updateWaveformPeriodNote();
-requestAnimationFrame(() => {
-  const syncedSize = getStartupCanvasSize();
-  initializeCanvasSizes(syncedSize.width, syncedSize.height);
-});
-// Create the image processor, which will handle all preprocessing steps to clean up the captured image before extraction.
+
+// Create the image cleanup pipeline.
 const imageProcessor = createImageProcessor({});
-// Create the camera controller, which will handle video capture and ROI selection.
+// Create the camera controller.
 const cameraController = createCameraController({
   video: document.getElementById('video'),
   processingCanvas,
@@ -92,7 +88,7 @@ const cameraController = createCameraController({
 });
 
 cameraController.init();
-// Handle UI interactions for spectrum scale and test signal generation.
+// Hook up the spectrum controls and test signal button.
 if (spectrumScaleSelect) {
   spectrumScaleSelect.addEventListener('change', (event) => {
     synthEngine.setSpectrumScale(event.target.value);
@@ -108,10 +104,18 @@ if (waveformPeriodInput) {
   const initialSeconds = Number.isFinite(synthEngine.getPanelDurationSeconds?.())
     ? synthEngine.getPanelDurationSeconds()
     : DEFAULT_PANEL_DURATION_SECONDS;
-  waveformPeriodInput.value = formatMilliseconds(initialSeconds * 1000);
+  let initialMs = Math.round(initialSeconds * 1000 * 10) / 10;
+  initialMs = Math.max(MIN_PANEL_PERIOD_MS, Math.min(MAX_PANEL_PERIOD_MS, initialMs));
+  waveformPeriodInput.value = initialMs;
+  if (waveformPeriodValue) waveformPeriodValue.textContent = initialMs;
 
-  waveformPeriodInput.addEventListener('change', () => {
-    applyWaveformPanelPeriodMs(waveformPeriodInput.value);
+  waveformPeriodInput.min = MIN_PANEL_PERIOD_MS;
+  waveformPeriodInput.max = MAX_PANEL_PERIOD_MS;
+
+  waveformPeriodInput.addEventListener('input', () => {
+    let val = Math.max(MIN_PANEL_PERIOD_MS, Math.min(MAX_PANEL_PERIOD_MS, waveformPeriodInput.value));
+    applyWaveformPanelPeriodMs(val);
+    if (waveformPeriodValue) waveformPeriodValue.textContent = val;
   });
 }
 
@@ -124,7 +128,7 @@ function initializeCanvasSizes(width, height) {
 
   if (spectrumCanvas) {
     spectrumCanvas.width = safeWidth;
-    spectrumCanvas.height = Math.max(120, Math.min(180, Math.round(safeHeight * 0.32)));
+    spectrumCanvas.height = Math.max(120, Math.min(180, Math.round(safeHeight * 0.5)));
   }
 
   if (processingCanvas) {
@@ -142,12 +146,17 @@ function updateWaveformPeriodNote() {
 
   const msText = formatMilliseconds(currentSeconds * 1000);
   waveformPeriodNoteEl.textContent = `Period: ${msText} ms`;
+  if (waveformPeriodInput && waveformPeriodValue) {
+    waveformPeriodInput.value = msText;
+    waveformPeriodValue.textContent = msText;
+  }
 }
 
 function applyWaveformPanelPeriodMs(periodMsValue) {
   if (!waveformPeriodInput) return;
 
-  const msValue = Number(periodMsValue);
+  let msValue = Number(periodMsValue);
+  msValue = Math.max(MIN_PANEL_PERIOD_MS, Math.min(MAX_PANEL_PERIOD_MS, msValue));
   const requestedSeconds = Number.isFinite(msValue)
     ? (msValue / 1000)
     : DEFAULT_PANEL_DURATION_SECONDS;
@@ -160,17 +169,6 @@ function applyWaveformPanelPeriodMs(periodMsValue) {
 function formatMilliseconds(ms) {
   const rounded = Math.round(ms * 10) / 10;
   return Number.isInteger(rounded) ? `${rounded}` : `${rounded.toFixed(1)}`;
-}
-
-function getStartupCanvasSize() {
-  const measuredWidth = Math.round(
-    waveformCanvas?.getBoundingClientRect?.().width
-      || waveformCanvas?.clientWidth
-      || 0,
-  );
-  const width = Math.max(320, measuredWidth || DEFAULT_STARTUP_WIDTH);
-  const height = Math.max(180, Math.round(width * DEFAULT_STARTUP_ASPECT));
-  return { width, height };
 }
 
 function handleTestSignalClick() {
@@ -190,7 +188,7 @@ function handleTestSignalClick() {
   drawWaveform(testWaveform);
 }
 
-// Build a fundamental test waveform over the panel sample space.
+// Make a simple test waveform so the app can be checked without the camera.
 function createTestWaveform(length, {
   baseCycles = 1,
   waveformType = 'sine',
@@ -226,7 +224,7 @@ function createTestWaveform(length, {
     out[i] = value;
   }
 
-  // Normalize to a predictable peak level for stable playback loudness.
+  // Keep the test signal at a predictable level.
   let maxAbs = 0;
   for (let i = 0; i < length; i++) {
     const abs = Math.abs(out[i]);
@@ -250,7 +248,7 @@ function clampNumber(value, min, max, fallback) {
   return Math.min(max, Math.max(min, num));
 }
 
-// Process one captured frame and turn it into a drawable/playable waveform.
+// Turn one captured frame into a waveform and update the app.
 function processCapturedImage(imageData, roi) {
   const processedImageData = imageProcessor.preprocessImage(imageData);
   if (!processedImageData) {
@@ -270,7 +268,7 @@ function processCapturedImage(imageData, roi) {
   drawWaveform(waveform);
 }
 
-// Draw the extracted waveform line on the waveform canvas.
+// Draw the waveform in the main analysis panel.
 function drawWaveform(waveform) {
   wctx.clearRect(0, 0, waveformCanvas.width, waveformCanvas.height);
 

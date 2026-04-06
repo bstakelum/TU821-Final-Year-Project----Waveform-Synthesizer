@@ -1,28 +1,25 @@
 // Image processing:
-// - cleans captured frames so the waveform trace stands out against background noise
-// - preserves image shape for downstream extraction (same width/height)
-// - OPTIMIZED: removed array cloning, histogram percentiles
-
-// Build and return the image processing helper used by the app.
+// - cleans the captured frame so the waveform line is easier to pick out
+// - keeps the image the same size for the next step
 export function createImageProcessor({
 } = {}) {
 
   const defaultConfig = {
-    flattenKernelRadius: 5, // Radius for local background estimation (larger = more aggressive flattening, but slower)
-    flattenBias: 118, // Bias added after flattening to keep trace visible (lower = more aggressive flattening)
-    contrastLowPercentile: 2, // Low percentile for contrast stretching (aggressive noise removal)
-    contrastHighPercentile: 98, // High percentile for contrast stretching (aggressive noise removal)
-    minIsolatedNeighborCount: 8, // Minimum number of white neighbors to keep a pixel (removes isolated noise)
-    erodeMinForegroundCount: 6, // Minimum number of white neighbors to keep a pixel during erosion (removes thin noise)
-    hysteresisHighPercentile: 96, // High percentile for strong trace pixels (aggressive noise removal)
-    hysteresisLowPercentile: 70, // Low percentile for weak trace pixels (keep if adjacent to strong pixels)
-    minComponentSizePixels: 50, // Minimum size of connected components to keep (removes small noise blobs, keeps main trace)
+    flattenKernelRadius: 5, // How wide the local background estimate is.
+    flattenBias: 118, // Brightness added back after flattening so the line stays visible.
+    contrastLowPercentile: 2, // Dark end used when stretching contrast.
+    contrastHighPercentile: 98, // Bright end used when stretching contrast.
+    minIsolatedNeighborCount: 8, // Removes lone bright pixels that look like noise.
+    erodeMinForegroundCount: 6, // Removes very thin bright specks.
+    hysteresisHighPercentile: 96, // Bright pixels that are definitely part of the line.
+    hysteresisLowPercentile: 70, // Dimmer pixels kept only when they touch strong pixels.
+    minComponentSizePixels: 50, // Small blobs below this size are discarded.
   };
 
-  // Reusable buffers for ping-pong processing (removes repeated cloning)
+  // Reuse working buffers so each frame does not keep allocating new arrays.
   let bufferA = null, bufferB = null, lastWidth = 0, lastHeight = 0;
 
-  // Initialize or reuse buffers based on image dimensions
+  // Create buffers when the image size changes.
   function initBuffers(width, height, pixelCount) {
     if (!bufferA || lastWidth !== width || lastHeight !== height) {
       bufferA = new Uint8ClampedArray(pixelCount);
@@ -32,7 +29,7 @@ export function createImageProcessor({
     }
   }
 
-  // Build histogram for fast percentile queries
+  // Count how often each gray value appears.
   function buildHistogram(data) {
     const hist = new Uint32Array(256);
     for (let i = 0; i < data.length; i += 4) {
@@ -41,7 +38,7 @@ export function createImageProcessor({
     return hist;
   }
 
-  // Find percentile value from histogram
+  // Read a percentile value from the histogram.
   function getPercentileFromHistogram(histogram, percentile) {
     const p = Math.max(0, Math.min(100, percentile));
     const totalPixels = histogram.reduce((a, b) => a + b, 0);
@@ -54,7 +51,7 @@ export function createImageProcessor({
     return 255;
   }
 
-  // Run the full preprocessing pipeline using two reusable buffers (ping-pong).
+  // Run the full cleanup pipeline.
   function preprocessImage(imageData) {
     if (!imageData) return null;
 
@@ -62,43 +59,43 @@ export function createImageProcessor({
     const pixelCount = data.length;
     initBuffers(width, height, pixelCount);
 
-    // Pipeline: reuse buffers A and B instead of cloning
+    // Move through the cleanup steps using the same two buffers.
     rgbaToGrayscale(data, bufferA);
     denoiseImage(width, height, bufferA, bufferB);
     flattenIllumination(width, height, bufferB, bufferA);
     enhanceContrast(bufferA, bufferB);
     
-    // NEW: Hysteresis thresholding (cleaner than single threshold)
+    // Keep strong line pixels and nearby weaker ones.
     applyHysteresisThreshold(bufferB, bufferA, 
       defaultConfig.hysteresisHighPercentile,
       defaultConfig.hysteresisLowPercentile);
     
-    // NEW: Horizontal morphological close (reinforce horizontal traces)
+    // Join short horizontal breaks in the line.
     horizontalClose(width, height, bufferA, bufferB, 2);
     
-    // NEW: Filter to keep only largest connected component (remove noise blobs)
+    // Keep the largest bright shape and drop the rest.
     filterByConnectedComponents(width, height, bufferB, 
       defaultConfig.minComponentSizePixels);
     
-    // Keep result in bufferB, move to bufferA for consistency
+    // Copy back into the main working buffer.
     bufferA.set(bufferB);
     
-    // Original cleanup (suppress isolated, dilate, erode)
+    // Final small cleanup pass.
     cleanupMask(width, height, bufferA);
 
-    // Create final ImageData from processed buffer
+    // Build the processed image output.
     const result = new ImageData(width, height);
     result.data.set(bufferA);
     return result;
   }
 
-  // Find a brightness value at a given percentile (using histogram).
+  // Look up a brightness level at a given percentile.
   function getGrayPercentile(data, percentile) {
     const histogram = buildHistogram(data);
     return getPercentileFromHistogram(histogram, percentile);
   }
 
-  // Convert color image data to grayscale (writes to output buffer).
+  // Convert the image to grayscale.
   function rgbaToGrayscale(srcData, dstData) {
     for (let i = 0; i < srcData.length; i += 4) {
       const gray = Math.round(0.299 * srcData[i] + 0.587 * srcData[i + 1] + 0.114 * srcData[i + 2]);
@@ -109,7 +106,7 @@ export function createImageProcessor({
     }
   }
 
-  // Smooth small speckles with optimized edge handling (no clamping in inner loop).
+  // Blur away very small speckles.
   function denoiseImage(width, height, srcData, dstData) {
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
@@ -134,7 +131,7 @@ export function createImageProcessor({
     }
   }
 
-  // Separable horizontal blur helper for fast illumination flattening
+  // Helper used by the lighting-flattening step.
   function horizontalBlur(width, height, src, dst, radius) {
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
@@ -149,7 +146,7 @@ export function createImageProcessor({
     }
   }
 
-  // Reduce uneven lighting using separable convolution (50% faster than nested loop).
+  // Reduce uneven lighting across the image.
   function flattenIllumination(width, height, srcData, dstData) {
     const radius = Math.max(1, Math.floor(defaultConfig.flattenKernelRadius));
     const bias = Number.isFinite(defaultConfig.flattenBias) ? defaultConfig.flattenBias : 128;
@@ -180,7 +177,7 @@ export function createImageProcessor({
     }
   }
 
-  // Stretch contrast so dark and bright areas separate more clearly.
+  // Spread out the brightness range so the line stands out more.
   function enhanceContrast(srcData, dstData) {
     const minValue = getGrayPercentile(srcData, defaultConfig.contrastLowPercentile);
     const maxValue = getGrayPercentile(srcData, defaultConfig.contrastHighPercentile);
@@ -200,9 +197,9 @@ export function createImageProcessor({
     }
   }
 
-  // Remove tiny artifacts and connect broken trace pieces in the mask.
+  // Remove tiny artifacts and reconnect small breaks.
   function cleanupMask(width, height, data) {
-    // Shrink white regions slightly to remove thin noise
+    // Shrink bright regions slightly to remove thin noise.
     const erode3x3 = (source, target) => {
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
@@ -221,7 +218,7 @@ export function createImageProcessor({
       }
     };
 
-    // Grow white regions to reconnect small breaks
+    // Grow bright regions to reconnect small gaps.
     const dilate3x3 = (source, target) => {
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
@@ -240,7 +237,7 @@ export function createImageProcessor({
       }
     };
 
-    // Remove isolated white dots that likely come from noise
+    // Remove isolated bright dots.
     const suppressIsolatedPixels = (source, target, minNeighborCount) => {
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
@@ -272,26 +269,25 @@ export function createImageProcessor({
     erode3x3(stageC, data);
   }
 
-  // Hysteresis thresholding: keep high-confidence pixels and low-confidence pixels adjacent to high.
-  // Purpose: Reduce isolated noise while connecting faint trace pixels to strong trace regions.
+  // Keep clearly bright pixels, and also keep dimmer pixels that touch them.
   function applyHysteresisThreshold(srcData, dstData, highPercentile, lowPercentile) {
     const highThresh = getGrayPercentile(srcData, highPercentile);
     const lowThresh = getGrayPercentile(srcData, lowPercentile);
 
-    // First pass: mark high-confidence pixels
+    // First pass: mark clearly bright pixels.
     const isHigh = new Uint8Array((srcData.length / 4) * 1);
     for (let i = 0; i < srcData.length; i += 4) {
       const idx = i / 4;
       isHigh[idx] = srcData[i] >= highThresh ? 1 : 0;
     }
 
-    // Second pass: keep high pixels and low-pixels adjacent to high
+    // Second pass: keep strong pixels and nearby weaker pixels.
     for (let i = 0; i < srcData.length; i += 4) {
       const idx = i / 4;
       let keep = isHigh[idx];
 
       if (!keep && srcData[i] >= lowThresh) {
-        // Check 8-neighborhood for high pixels
+        // Check nearby pixels for a strong neighbor.
         const width = lastWidth, height = lastHeight;
         const x = idx % width, y = Math.floor(idx / width);
         const x0 = Math.max(0, x - 1), x1 = Math.min(width - 1, x + 1);
@@ -312,12 +308,11 @@ export function createImageProcessor({
     }
   }
 
-  // Horizontal morphological close: dilate horizontally then erode horizontally.
-  // Purpose: Connect gaps in horizontal traces, suppress vertical noise.
+  // Fill short horizontal gaps in the line.
   function horizontalClose(width, height, srcData, dstData, radius) {
     const temp = new Uint8ClampedArray(srcData.length);
 
-    // Horizontal dilate: spread white pixels left/right
+    // Spread bright pixels left and right.
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         let fg = false;
@@ -331,7 +326,7 @@ export function createImageProcessor({
       }
     }
 
-    // Horizontal erode: shrink white regions back
+    // Shrink the result back down.
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         let allWhite = true;
@@ -349,14 +344,13 @@ export function createImageProcessor({
     }
   }
 
-  // Connected component filtering: keep only the N largest components.
-  // Purpose: Remove noise blobs; preserve main trace.
+  // Keep only the largest bright region.
   function filterByConnectedComponents(width, height, data, minSizePixels) {
     const n = (data.length / 4);
     const label = new Int32Array(n);
     let nextLabel = 1;
 
-    // Simple flood-fill labeling
+    // Label one connected bright region at a time.
     const floodFill = (startIdx) => {
       const stack = [startIdx];
       const component = [];
@@ -382,7 +376,7 @@ export function createImageProcessor({
       return component;
     };
 
-    // Label all components
+    // Find all connected bright regions.
     const components = [];
     for (let i = 0; i < n; i++) {
       if (!label[i] && data[(i) * 4] === 255) {
@@ -394,7 +388,7 @@ export function createImageProcessor({
       }
     }
 
-    // Keep only largest component; zero out others
+    // Keep the largest region and clear the others.
     if (components.length > 0) {
       components.sort((a, b) => b.size - a.size);
       const largestLabel = components[0].label;

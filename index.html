@@ -8,12 +8,12 @@
 </head>
 
 <body>
-  <!-- App title and high-level layout container -->
+  <!-- App title -->
   <h1>Hand-Drawn Waveform Synthesizer</h1>
 
   <div class="container">
 
-    <!-- Camera Panel -->
+    <!-- Camera controls -->
     <div class="panel">
       <h2>Controls</h2>
       <div class="camera-card debug-panel">
@@ -23,16 +23,23 @@
           <canvas id="processingCanvas"></canvas>
         </div>
         <div class="controls">
-          <!-- Primary action starts/stops camera; secondary controls appear while active -->
+          <!-- Extra camera controls only show while the camera is running -->
           <button id="startCamera">Start Camera</button>
           <div id="cameraControls" class="hidden">
-            <button id="captureFrame">Capture Frame</button>
+            <button id="captureFrame">Capture Waveform</button>
             <button id="resetROI">Reset ROI</button>
             <div class="camera-select-row">
               <button id="cameraToggle">Front</button>
             </div>
             <div class="roi-controls">
-              <!-- ROI sliders define the rectangular capture region in percentages -->
+              <div class="info-row">
+                <span class="info-label">ROI</span>
+                <span class="info-inline">
+                  <button class="info-trigger" type="button" aria-label="What is ROI?">?</button>
+                  <span class="info-box" role="tooltip">ROI means Region of Interest. It is the part of the camera image the app will use when looking for the waveform.</span>
+                </span>
+              </div>
+              <!-- ROI sliders set the capture area as percentages of the frame -->
               <div class="roi-row">
                 <label>Top <input id="roiTop" type="range" min="0" max="80" value="20"> <span id="roiTopVal">20%</span></label>
                 <label>Bottom <input id="roiBottom" type="range" min="20" max="100" value="80"> <span id="roiBottomVal">80%</span></label>
@@ -45,12 +52,17 @@
           </div>
         </div>
       </div>
-      <!--Test signal generation panel for debugging and demonstration purposes.-->
+      <!-- Test signal panel for quick checks without the camera -->
       <div id="testSignalPanel" class="debug-panel">
         <h3>Test Signal</h3>
         <div class="test-signal-controls">
           <div class="test-signal-field">
-            <label for="testSignalType">Waveform</label>
+            <label for="testSignalType">Waveform
+              <span class="info-inline">
+                <button class="info-trigger" type="button" aria-label="What is a waveform?">?</button>
+                <span class="info-box" role="tooltip">A waveform is the shape of a signal over time. Different shapes sound different and produce different spectra.</span>
+              </span>
+            </label>
             <select id="testSignalType">
               <option value="sine" selected>Sine</option>
               <option value="cosine">Cosine</option>
@@ -62,7 +74,7 @@
 
           <div class="test-signal-field">
             <label for="testSignalPeriods">Periods</label>
-            <input id="testSignalPeriods" type="number" min="0.5" max="64" step="0.5" value="1" />
+            <input id="testSignalPeriods" type="number" min="1" max="50" step="1" value="1" />
           </div>
 
           <button id="testSignal">Generate Test Signal</button>
@@ -70,12 +82,17 @@
       </div>
     </div>
 
-    <!-- Right Column: waveform panel above analysis panel -->
+    <!-- Analysis area -->
     <div class="right-column">
         <div class="panel">
         <h2>Analysis</h2>
           <div class="waveform-card">
-            <h3>Synthesized Waveform</h3>
+            <h3>Synthesized Waveform
+              <span class="info-inline">
+                <button class="info-trigger" type="button" aria-label="What is a synthesized waveform?">?</button>
+                <span class="info-box" role="tooltip">This is the waveform the app will play as one repeating cycle. Its shape controls the sound and the spectrum.</span>
+              </span>
+            </h3>
             <div class="waveform-wrapper">
               <div id="waveformPeriodNote" class="waveform-period-note">Period: 10 ms</div>
               <canvas id="waveformCanvas"></canvas>
@@ -83,22 +100,46 @@
             <div class="controls audio-controls">
               <div class="audio-primary-controls">
                 <button id="playSynth">Play</button>
-                <label for="waveformPeriodMs">Panel Period (ms)</label>
-                <input id="waveformPeriodMs" type="number" min="1" max="200" step="0.5" value="10" />
+                <label for="waveformPeriodMs">Panel Period (ms)
+                  <span class="info-inline">
+                    <button class="info-trigger" type="button" aria-label="What is period?">?</button>
+                    <span class="info-box" role="tooltip">The period is the time taken for one full cycle. A shorter period means a higher pitch.</span>
+                  </span>
+                </label>
+                <input id="waveformPeriodMs" type="range" min="1" max="15" step="1" value="10" />
+                <span id="waveformPeriodValue" style="margin-left:8px;min-width:36px;display:inline-block;">10</span>
                 <button id="downloadWaveform" style="margin-top:8px;">Download Waveform (.csv)</button>
               </div>
             </div>
         </div>
 
-          <!-- Spectrum view from the current synthesized wavetable -->
+          <!-- Spectrum view of the current waveform -->
           <div id="spectrumPanel" class="debug-panel">
-            <h3>Frequency Spectrum</h3>
-            <div class="spectrum-controls">
-              <label for="spectrumScale">Scale</label>
-              <select id="spectrumScale">
-                <option value="linear" selected>Linear</option>
-                <option value="log">Log</option>
-              </select>
+            <div class="spectrum-header">
+              <h3 class="spectrum-title">Frequency Spectrum</h3>
+              <span class="info-inline">
+                <button class="info-trigger" type="button" aria-label="What is a spectrum?">?</button>
+                <span class="info-box" role="tooltip"> A frequency spectrum is a graphical representation of a waveform/signal that plots frequency content against amplitude.</span>
+              </span>
+              <div class="spectrum-controls">
+                <label for="spectrumScale">Scale</label>
+                <select id="spectrumScale">
+                  <option value="linear" selected>Linear</option>
+                  <option value="log">Log</option>
+                </select>
+              </div>
+              <span class="info-inline">
+                <button class="info-trigger" type="button" aria-label="What does scale mean?">?</button>
+                <span class="info-box" role="tooltip">Linear scale spaces frequencies evenly. Log scale spreads out the low frequencies so they are easier to inspect.</span>
+              </span>
+              <span class="info-inline">
+                <button class="info-trigger" type="button" aria-label="What is an FFT?">FFT</button>
+                <span class="info-box" role="tooltip">FFT stands for Fast Fourier Transform. It is a fast way to calculate the frequency content of sampled data.</span>
+              </span>
+              <span class="info-inline">
+                <button class="info-trigger" type="button" aria-label="What is the Nyquist limit?">Nyquist</button>
+                <span class="info-box" role="tooltip">The Nyquist limit is the highest frequency a sampled waveform can represent without aliasing.</span>
+              </span>
             </div>
             <canvas id="spectrumCanvas"></canvas>
           </div>
@@ -106,8 +147,6 @@
     </div>
 
   </div>
-
-  <!-- processingCanvas moved into camera panel as overlay -->
 
   <script type="module" src="app.js"></script>
 </body>

@@ -1,8 +1,7 @@
 // Camera controller:
-// - starts/stops camera streams and toggles front/back facing mode
-// - manages ROI sliders and draws a live shaded ROI overlay
-// - captures full-frame image data and reports ROI bounds for extraction
-// Build and return the camera controller used by the app.
+// - starts and stops the camera
+// - manages the ROI sliders and overlay
+// - captures the current frame for waveform extraction
 export function createCameraController({
   video,
   processingCanvas,
@@ -43,7 +42,7 @@ export function createCameraController({
     rightVal,
   } = roiElements;
 
-  // Main flow API: initialize controls/events, then start/stop camera lifecycle.
+  // Hook up the buttons and sliders.
   function init() {
     bindROIControls();
     updateCameraToggleUI();
@@ -99,16 +98,6 @@ export function createCameraController({
       currentStream = stream;
       video.srcObject = stream;
 
-      // Log actual camera resolution for debugging
-      const track = stream.getVideoTracks()[0];
-      const settings = track.getSettings();
-      console.log('Camera resolution:', {
-        width: settings.width,
-        height: settings.height,
-        frameRate: settings.frameRate,
-        facingMode: settings.facingMode
-      });
-
       startOverlayLoop();
       if (cameraControls) cameraControls.classList.remove('hidden');
       if (startButton) startButton.textContent = 'Stop Camera';
@@ -134,7 +123,7 @@ export function createCameraController({
     if (video.readyState < 2 || captureCanvas.width === 0 || captureCanvas.height === 0) {
       return null;
     }
-    // Draw the current video frame to an offscreen canvas and extract the pixel data.
+    // Copy the current video frame into an offscreen canvas.
     cctx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
     const imageData = cctx.getImageData(0, 0, captureCanvas.width, captureCanvas.height);
     const roi = computeROI();
@@ -150,7 +139,7 @@ export function createCameraController({
     return track.getSettings();
   }
 
-  // Keep the slider values and text labels in sync with the current ROI.
+  // Keep the slider values and labels in sync.
   function syncROIDisplay() {
     if (topVal) topVal.textContent = Math.round(roiTopPct * 100) + '%';
     if (bottomVal) bottomVal.textContent = Math.round(roiBottomPct * 100) + '%';
@@ -163,7 +152,7 @@ export function createCameraController({
     if (rightInput) rightInput.value = Math.round(roiRightPct * 100);
   }
 
-  // Reset ROI to full frame.
+  // Reset the ROI to the full frame.
   function resetROI() {
     roiTopPct = 0.0;
     roiBottomPct = 1.0;
@@ -172,7 +161,7 @@ export function createCameraController({
     syncROIDisplay();
   }
 
-  // Connect ROI sliders and keep valid top/bottom and left/right limits.
+  // Connect the ROI sliders and stop them from crossing over.
   function bindROIControls() {
     if (roiControlsBound) {
       syncROIDisplay();
@@ -213,7 +202,7 @@ export function createCameraController({
     syncROIDisplay();
   }
 
-  // Convert ROI percentages into pixel coordinates.
+  // Convert the ROI from percentages into pixel coordinates.
   function computeROI() {
     const x = Math.floor(processingCanvas.width * roiLeftPct);
     const y = Math.floor(processingCanvas.height * roiTopPct);
@@ -222,7 +211,7 @@ export function createCameraController({
     return { x, y, width: w, height: h };
   }
 
-  // Draw a shaded overlay so the selected ROI is easy to see.
+  // Draw a shaded overlay around the selected area.
   function drawOverlay() {
     const roi = computeROI();
 
@@ -240,9 +229,8 @@ export function createCameraController({
     pctx.restore();
   }
 
-  // Keep the live overlay updating while the camera is running.
+  // Keep the live preview and ROI overlay updating.
   function startOverlayLoop() {
-    // Draw one overlay frame, then schedule the next one.
     function loop() {
       if (!currentStream) {
         overlayAnimationId = null;
@@ -262,7 +250,7 @@ export function createCameraController({
     if (overlayAnimationId == null) loop();
   }
 
-  // Stop drawing the live overlay.
+  // Stop the live overlay loop.
   function stopOverlayLoop() {
     if (overlayAnimationId != null) {
       cancelAnimationFrame(overlayAnimationId);
@@ -270,34 +258,17 @@ export function createCameraController({
     }
   }
 
-  // Update button text so it shows which camera side is selected.
+  // Show which camera side will be used next.
   function updateCameraToggleUI() {
     if (!cameraToggleButton) return;
     cameraToggleButton.textContent = preferredFacing === 'user' ? 'Front' : 'Back';
   }
 
-  // Try the selected camera side first, then fall back to any camera.
+  // Try the chosen camera first, then fall back to any camera.
   async function getPreferredCameraStream() {
     const facing = preferredFacing || 'user';
 
     const attempts = [
-      // Try high resolution first
-      { 
-        video: { 
-          facingMode: { exact: facing },
-          width: { ideal: 1920, min: 1280 },
-          height: { ideal: 1080, min: 720 }
-        }, 
-        audio: false 
-      },
-      { 
-        video: { 
-          facingMode: { ideal: facing },
-          width: { ideal: 1920, min: 1280 },
-          height: { ideal: 1080, min: 720 }
-        }, 
-        audio: false 
-      },
       // Fallback to any resolution
       { video: { facingMode: { exact: facing } }, audio: false },
       { video: { facingMode: { ideal: facing } }, audio: false },

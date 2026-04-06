@@ -1,25 +1,21 @@
 // Audio engine:
-// - runs wavetable playback with play/stop controls
-// - prepares extracted waveforms for synthesis (DC removal + upsampling)
-// - renders a Goertzel-based spectrum
-// Build and return the audio controller used by the app.
+// - plays the current waveform as a looping sound
+// - prepares the waveform for playback
+// - draws an FFT-based spectrum
 export function createSynthAudioEngine({
   playButton,
   spectrumCanvas,
 }) {
-  const MAX_INTERPOLATED_SAMPLES = 65536; // 16-bit audio buffer size for high-quality resampling
-  // Default loop period for one complete wavetable cycle (user-adjustable from UI).
+  // Default time for one full waveform loop. The slider can change this.
   const DEFAULT_PANEL_DURATION_SECONDS = 0.01;
-  const MIN_PANEL_DURATION_SECONDS = 0.001;
-  const MAX_PANEL_DURATION_SECONDS = 0.2;
-  const ATTACK_SECONDS = 0.01;
-  const RELEASE_SECONDS = 0.04;
+  const MIN_PANEL_DURATION_SECONDS = 0.001; // 1 ms
+  const MAX_PANEL_DURATION_SECONDS = 0.015; // 15 ms
+  const ATTACK_SECONDS = 0.005;
+  const RELEASE_SECONDS = 0.005;
   const SPECTRUM_BAR_COUNT = 100;
   const SPECTRUM_MIN_HZ = 20;
-  const SPECTRUM_MAX_HZ = 20000;
+  const SPECTRUM_MAX_HZ = 40000;
   const DEFAULT_SPECTRUM_SCALE = 'linear';
-  const PEAK_ESTIMATE_COARSE_STEPS = 512;
-  const PEAK_ESTIMATE_REFINE_STEPS = 64;
 
   let audioContext = null;
   let masterGainNode = null;
@@ -31,7 +27,7 @@ export function createSynthAudioEngine({
 
   const spectrumCtx = spectrumCanvas ? spectrumCanvas.getContext('2d') : null;
 
-  // Main process flow API.
+  // Store a new waveform and refresh the spectrum.
   function updateWaveform(waveform) {
     prepareWaveformForSynthesis(waveform);
 
@@ -39,7 +35,7 @@ export function createSynthAudioEngine({
       return;
     }
   }
-  // Adjust the loop frequency of the wavetable playback based on the desired panel duration.
+  // Change the playback period and redraw the spectrum.
   function setPanelDurationSeconds(seconds) {
     panelDurationSeconds = sanitizePanelDurationSeconds(seconds);
 
@@ -57,7 +53,7 @@ export function createSynthAudioEngine({
     return panelDurationSeconds;
   }
 
-  // This will turn audio on and start synthesis playback behavior.
+  // Start audio output.
   async function startAudio() {
     ensureAudioEngine();
 
@@ -75,7 +71,7 @@ export function createSynthAudioEngine({
     isActive = true;
     if (playButton) playButton.textContent = 'Stop';
   }
-  // Set the spectrum display mode (linear or logarithmic) and redraw the spectrum if needed.
+  // Switch the spectrum between linear and log frequency spacing.
   function setSpectrumScale(mode) {
     spectrumScale = mode === 'log' ? 'log' : 'linear';
     if (preparedWavetable) {
@@ -122,11 +118,14 @@ export function createSynthAudioEngine({
     setSpectrumScale,
     setPanelDurationSeconds,
     getPanelDurationSeconds: () => panelDurationSeconds,
-    getPreparedWavetableLength: () => (preparedWavetable ? preparedWavetable.length : 0),    startAudio,
-    stopAudio,    exportWaveformToCSV,
+    getPreparedWavetableLength: () => (preparedWavetable ? preparedWavetable.length : 0),
+    startAudio,
+    stopAudio,
+    exportWaveformToCSV,
     get preparedWavetable() { return preparedWavetable; },
   };
-  // Export a waveform array as a CSV file for MATLAB compatibility
+
+  // Save the prepared waveform as a simple CSV file.
   function exportWaveformToCSV(waveform, filename = 'waveform.csv') {
     if (!Array.isArray(waveform) && !(waveform instanceof Float32Array) && !(waveform instanceof Float64Array)) {
       console.error('exportWaveformToCSV: Input is not an array');
@@ -145,7 +144,7 @@ export function createSynthAudioEngine({
       URL.revokeObjectURL(url);
     }, 100);
   }
-  // Sanitize and clamp the panel duration seconds to a reasonable range to prevent extreme playback speeds.
+  // Keep the panel period inside safe limits.
   function sanitizePanelDurationSeconds(value) {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return DEFAULT_PANEL_DURATION_SECONDS;
@@ -172,7 +171,7 @@ export function createSynthAudioEngine({
 
     return hasFinite ? out : null;
   }
-  // Remove DC offset from the waveform by subtracting the mean value, centering it around zero for better synthesis quality.
+  // Move the waveform so it is centered around zero.
   function removeDcOffset(waveform) {
     let sum = 0;
     for (let i = 0; i < waveform.length; i++) {
@@ -186,39 +185,8 @@ export function createSynthAudioEngine({
 
     return waveform;
   }
-  // Resample the input waveform to the target length using linear interpolation, ensuring consistent quality and better looped playback.
-  function resampleToLength(waveform, targetLength) {
-    if (!waveform || waveform.length <= 0 || targetLength <= 0) {
-      return null;
-    }
 
-    const out = new Float32Array(targetLength);
-
-    if (waveform.length === 1) {
-      out.fill(waveform[0]);
-      return out;
-    }
-
-    for (let i = 0; i < targetLength; i++) {
-      const position = (i / targetLength) * waveform.length;
-      const indexA = Math.floor(position);
-      const indexB = (indexA + 1) % waveform.length;
-      const frac = position - indexA;
-
-      const a = waveform[indexA];
-      const b = waveform[indexB];
-      out[i] = a + (b - a) * frac;
-    }
-
-    return out;
-  }
-
-  function getTargetWavetableLength(sourceLength) {
-    if (!Number.isFinite(sourceLength) || sourceLength <= 0) return 0;
-
-    return Math.max(sourceLength, MAX_INTERPOLATED_SAMPLES);
-  }
-  // Ensure the audio context and master gain node are created and connected properly for synthesis playback.
+  // Create the audio nodes the first time audio is needed.
   function ensureAudioEngine() {
     if (!audioContext) {
       audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -243,80 +211,104 @@ export function createSynthAudioEngine({
     }
     return minHz + (maxHz - minHz) * ratio;
   }
-  // Build a Hann window of the specified length for spectral analysis, which helps reduce spectral leakage and provides smoother magnitude estimates.
-  function buildHannWindow(length) {
-    const out = new Float32Array(length);
-    if (length <= 1) {
-      out.fill(1);
-      return out;
+  function nextPowerOfTwo(value) {
+    let size = 1;
+    while (size < value) {
+      size <<= 1;
     }
-    for (let i = 0; i < length; i++) {
-      out[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (length - 1)));
+    return size;
+  }
+
+  // Run a simple radix-2 FFT on the waveform for the spectrum display.
+  function computeFftMagnitudes(signal) {
+    const fftSize = nextPowerOfTwo(signal.length);
+    const real = new Float32Array(fftSize);
+    const imag = new Float32Array(fftSize);
+    const magnitudeCount = (fftSize >> 1) + 1;
+    const magnitudes = new Float32Array(magnitudeCount);
+
+    for (let i = 0; i < signal.length; i++) {
+      real[i] = signal[i];
     }
+
+    for (let i = 1, j = 0; i < fftSize; i++) {
+      let bit = fftSize >> 1;
+      while (j & bit) {
+        j ^= bit;
+        bit >>= 1;
+      }
+      j ^= bit;
+
+      if (i < j) {
+        const tempReal = real[i];
+        real[i] = real[j];
+        real[j] = tempReal;
+
+        const tempImag = imag[i];
+        imag[i] = imag[j];
+        imag[j] = tempImag;
+      }
+    }
+
+    for (let size = 2; size <= fftSize; size <<= 1) {
+      const halfSize = size >> 1;
+      const tableStep = (-2 * Math.PI) / size;
+
+      for (let start = 0; start < fftSize; start += size) {
+        for (let offset = 0; offset < halfSize; offset++) {
+          const evenIndex = start + offset;
+          const oddIndex = evenIndex + halfSize;
+          const angle = tableStep * offset;
+          const twiddleReal = Math.cos(angle);
+          const twiddleImag = Math.sin(angle);
+          const oddReal = real[oddIndex];
+          const oddImag = imag[oddIndex];
+          const tempReal = twiddleReal * oddReal - twiddleImag * oddImag;
+          const tempImag = twiddleReal * oddImag + twiddleImag * oddReal;
+
+          real[oddIndex] = real[evenIndex] - tempReal;
+          imag[oddIndex] = imag[evenIndex] - tempImag;
+          real[evenIndex] += tempReal;
+          imag[evenIndex] += tempImag;
+        }
+      }
+    }
+
+    for (let i = 0; i < magnitudeCount; i++) {
+      magnitudes[i] = Math.hypot(real[i], imag[i]) / signal.length;
+    }
+
+    return {
+      fftSize,
+      magnitudes,
+    };
+  }
+
+  function buildSpectrumBarsFromFft(magnitudes, sampleRateHz, minHz, maxHz, bars, scale) {
+    const out = new Float32Array(bars);
+    const nyquistHz = 0.5 * sampleRateHz;
+    const fftSize = (magnitudes.length - 1) * 2;
+    const binWidthHz = sampleRateHz / fftSize;
+
+    for (let i = 0; i < bars; i++) {
+      const centerHz = getFrequencyAtRatio((i + 0.5) / bars, minHz, maxHz, scale);
+
+      if (centerHz <= 0 || centerHz > nyquistHz) {
+        out[i] = 0;
+        continue;
+      }
+
+      const binIndex = Math.min(
+        magnitudes.length - 1,
+        Math.max(0, Math.round(centerHz / binWidthHz)),
+      );
+      out[i] = magnitudes[binIndex];
+    }
+
     return out;
   }
-  // Compute the magnitude of a specific frequency component in the signal using the Goertzel algorithm, which is efficient for single-bin analysis and works well for our use case of estimating dominant frequencies in the extracted waveform.
-  function goertzelMagnitude(signal, window, frequencyHz, sampleRateHz) {
-    const n = signal.length;
-    const omega = (2 * Math.PI * frequencyHz) / sampleRateHz;
-    const coeff = 2 * Math.cos(omega);
-    let sPrev = 0;
-    let sPrev2 = 0;
 
-    for (let i = 0; i < n; i++) {
-      const sample = signal[i] * window[i];
-      const s = sample + coeff * sPrev - sPrev2;
-      sPrev2 = sPrev;
-      sPrev = s;
-    }
-
-    const power = sPrev2 * sPrev2 + sPrev * sPrev - coeff * sPrev * sPrev2;
-    return Math.sqrt(Math.max(0, power)) / n;
-  }
-  // Estimate the dominant frequency in the signal by performing a coarse search over the specified frequency range, followed by a finer search around the best candidate. This two-stage approach balances accuracy and computational efficiency for real-time spectrum visualization.
-  function estimateDominantFrequency(signal, window, sampleRateHz, minHz, maxHz) {
-    if (!signal || signal.length < 4 || maxHz <= minHz) {
-      return minHz;
-    }
-
-    const coarseSteps = PEAK_ESTIMATE_COARSE_STEPS;
-    const coarseSpan = maxHz - minHz;
-    const coarseStepHz = coarseSpan / coarseSteps;
-
-    let bestHz = minHz;
-    let bestMag = -1;
-
-    for (let i = 0; i <= coarseSteps; i++) {
-      const hz = minHz + i * coarseStepHz;
-      const mag = goertzelMagnitude(signal, window, hz, sampleRateHz);
-      if (mag > bestMag) {
-        bestMag = mag;
-        bestHz = hz;
-      }
-    }
-
-    const refineMin = Math.max(minHz, bestHz - coarseStepHz);
-    const refineMax = Math.min(maxHz, bestHz + coarseStepHz);
-    if (refineMax <= refineMin) return bestHz;
-
-    const refineSteps = PEAK_ESTIMATE_REFINE_STEPS;
-    const refineStepHz = (refineMax - refineMin) / refineSteps;
-
-    let refinedHz = bestHz;
-    let refinedMag = bestMag;
-
-    for (let i = 0; i <= refineSteps; i++) {
-      const hz = refineMin + i * refineStepHz;
-      const mag = goertzelMagnitude(signal, window, hz, sampleRateHz);
-      if (mag > refinedMag) {
-        refinedMag = mag;
-        refinedHz = hz;
-      }
-    }
-
-    return refinedHz;
-  }
-  // Render a spectrum visualization of the waveform on the canvas using Goertzel-based magnitude estimates for a set of frequency bins, along with axes, labels, and a peak frequency indicator. The spectrum is displayed in either linear or logarithmic scale based on user selection.
+  // Draw the spectrum by sampling the FFT at the middle of each display bar.
   function drawSpectrumFromWaveform(waveform) {
     if (!spectrumCanvas || !spectrumCtx || !waveform || waveform.length < 4) {
       clearSpectrumCanvas();
@@ -336,38 +328,29 @@ export function createSynthAudioEngine({
 
     spectrumCtx.fillStyle = '#000';
     spectrumCtx.fillRect(0, 0, width, height);
+    // Keep the same visible frequency range regardless of the waveform.
+    const minDisplayHz = SPECTRUM_MIN_HZ;
+    const maxDisplayHz = SPECTRUM_MAX_HZ;
 
     const virtualSampleRate = waveform.length / panelDurationSeconds;
     const nyquistHz = 0.5 * virtualSampleRate;
-    const minDisplayHz = Math.max(1, SPECTRUM_MIN_HZ);
-    const maxDisplayHz = Math.min(SPECTRUM_MAX_HZ, nyquistHz);
-    if (maxDisplayHz <= minDisplayHz) {
-      clearSpectrumCanvas();
-      return;
-    }
 
-    const window = buildHannWindow(waveform.length);
     const bars = SPECTRUM_BAR_COUNT;
     const gap = 1;
-
-    const mags = new Float32Array(bars);
-    let maxMag = 0;
-
-    for (let i = 0; i < bars; i++) {
-      const centerRatio = (i + 0.5) / bars;
-      const centerHz = getFrequencyAtRatio(centerRatio, minDisplayHz, maxDisplayHz, spectrumScale);
-      const magnitude = goertzelMagnitude(waveform, window, centerHz, virtualSampleRate);
-      mags[i] = magnitude;
-      if (magnitude > maxMag) maxMag = magnitude;
-    }
-
-    const peakHz = estimateDominantFrequency(
-      waveform,
-      window,
+    const fft = computeFftMagnitudes(waveform);
+    const mags = buildSpectrumBarsFromFft(
+      fft.magnitudes,
       virtualSampleRate,
       minDisplayHz,
       maxDisplayHz,
+      bars,
+      spectrumScale,
     );
+    let maxMag = 0;
+
+    for (let i = 0; i < bars; i++) {
+      if (mags[i] > maxMag) maxMag = mags[i];
+    }
 
     // Axes and labels.
     spectrumCtx.strokeStyle = '#334155';
@@ -389,6 +372,7 @@ export function createSynthAudioEngine({
       spectrumCtx.fillText(`${t}`, plotX - 16, y + 3);
     }
 
+    // Draw bars
     for (let i = 0; i < bars; i++) {
       const magnitude = maxMag > 0 ? mags[i] / maxMag : 0;
       const barHeight = Math.max(1, Math.round(magnitude * plotHeight));
@@ -399,7 +383,6 @@ export function createSynthAudioEngine({
       const widthPx = Math.max(1, x1 - x0);
       const x = x0;
       const y = plotY + plotHeight - barHeight;
-
       const r = Math.round(40 + 210 * magnitude);
       const g = Math.round(100 + 120 * (1 - magnitude));
       const b = Math.round(255 - 170 * magnitude);
@@ -407,9 +390,29 @@ export function createSynthAudioEngine({
       spectrumCtx.fillRect(x, y, widthPx, barHeight);
     }
 
+    // Draw vertical Nyquist line
+    if (nyquistHz > minDisplayHz && nyquistHz < maxDisplayHz) {
+      const nyquistRatio = spectrumScale === 'log'
+        ? Math.log(nyquistHz / minDisplayHz) / Math.log(maxDisplayHz / minDisplayHz)
+        : (nyquistHz - minDisplayHz) / (maxDisplayHz - minDisplayHz);
+      const nx = Math.round(plotX + nyquistRatio * plotWidth);
+      spectrumCtx.save();
+      spectrumCtx.strokeStyle = '#00e0ff';
+      spectrumCtx.lineWidth = 2;
+      spectrumCtx.setLineDash([3, 3]);
+      spectrumCtx.beginPath();
+      spectrumCtx.moveTo(nx, plotY);
+      spectrumCtx.lineTo(nx, plotY + plotHeight);
+      spectrumCtx.stroke();
+      spectrumCtx.setLineDash([]);
+      spectrumCtx.restore();
+    }
+
+
+    // Frequency labels along the bottom.
     const majorTickHz = spectrumScale === 'log'
-      ? [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
-      : [0, 4000, 8000, 12000, 16000, 20000];
+      ? [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 40000]
+      : [0, 4000, 8000, 12000, 16000, 20000, 24000, 28000, 32000, 36000, 40000];
     const formatHz = (hz) => (hz >= 1000 ? `${(hz / 1000).toFixed(hz >= 10000 ? 0 : 1)}k` : `${Math.round(hz)}`);
     spectrumCtx.fillStyle = '#8aa0b6';
     for (let i = 0; i < majorTickHz.length; i++) {
@@ -430,18 +433,49 @@ export function createSynthAudioEngine({
       spectrumCtx.fillText(formatHz(freqHz), x, height - 10);
     }
 
-    const peakLabel = peakHz >= 1000
-      ? `Peak ${ (peakHz / 1000).toFixed(2) } kHz`
-      : `Peak ${ Math.round(peakHz) } Hz`;
-    spectrumCtx.fillStyle = '#cbd5e1';
+    // Show the rough human hearing range.
+    spectrumCtx.save();
+    const hearingMinHz = 20;
+    const hearingMaxHz = 20000;
+    const minRatio = spectrumScale === 'log'
+      ? Math.log(hearingMinHz / minDisplayHz) / Math.log(maxDisplayHz / minDisplayHz)
+      : (hearingMinHz - minDisplayHz) / (maxDisplayHz - minDisplayHz);
+    const maxRatio = spectrumScale === 'log'
+      ? Math.log(hearingMaxHz / minDisplayHz) / Math.log(maxDisplayHz / minDisplayHz)
+      : (hearingMaxHz - minDisplayHz) / (maxDisplayHz - minDisplayHz);
+    const xMin = plotX + minRatio * plotWidth;
+    const xMax = plotX + maxRatio * plotWidth;
+    const y = plotY + plotHeight + 6;
+    spectrumCtx.strokeStyle = '#ffb300';
+    spectrumCtx.lineWidth = 3;
+    spectrumCtx.setLineDash([6, 6]);
+    spectrumCtx.beginPath();
+    spectrumCtx.moveTo(xMin, y);
+    spectrumCtx.lineTo(xMax, y);
+    spectrumCtx.stroke();
+    spectrumCtx.setLineDash([]);
+    spectrumCtx.restore();
+
+    // Small legend for the guide lines.
+    const legendLines = ['Nyquist', 'Human Hearing Range'];
+    spectrumCtx.font = '12px sans-serif';
     spectrumCtx.textAlign = 'right';
-    spectrumCtx.fillText(peakLabel, width - 6, 10);
+    let legendY = plotY + 18;
+    for (let i = 0; i < legendLines.length; i++) {
+      let color = '#cbd5e1';
+      if (legendLines[i].includes('Nyquist')) color = '#00e0ff';
+      if (legendLines[i].includes('Human Hearing')) color = '#ffb300';
+      spectrumCtx.fillStyle = color;
+      spectrumCtx.fillText(legendLines[i], plotX + plotWidth - 2, legendY);
+      legendY += 16;
+    }
 
     spectrumCtx.textAlign = 'center';
+    spectrumCtx.fillStyle = '#ffffff';
     spectrumCtx.fillText('Frequency (Hz)', plotX + plotWidth * 0.5, height - 1);
     spectrumCtx.textAlign = 'left';
   }
-  // Prepare the extracted waveform for synthesis by ensuring it's finite, removing DC offset, and resampling to a consistent length for better playback quality. Then update the spectrum visualization based on the prepared wavetable.
+  // Clean the waveform and refresh the spectrum.
   function prepareWaveformForSynthesis(waveform) {
     const finiteWaveform = toFiniteWaveform(waveform);
     if (!finiteWaveform) {
@@ -451,10 +485,7 @@ export function createSynthAudioEngine({
     }
 
     removeDcOffset(finiteWaveform);
-    const targetLength = getTargetWavetableLength(finiteWaveform.length);
-    preparedWavetable = targetLength === finiteWaveform.length
-      ? finiteWaveform
-      : resampleToLength(finiteWaveform, targetLength);
+    preparedWavetable = finiteWaveform;
     drawSpectrumFromWaveform(preparedWavetable);
   }
 
@@ -500,7 +531,7 @@ export function createSynthAudioEngine({
     activeSourceNode = source;
     return true;
   }
-  // Stop the synthesis playback with a smooth release envelope to avoid clicks, and clean up the source node after it finishes.
+  // Fade out the sound to avoid clicks.
   function stopCustomSynthesis() {
     if (!audioContext || !masterGainNode) return;
     if (!activeSourceNode) return;

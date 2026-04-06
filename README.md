@@ -1,87 +1,147 @@
 Web app: https://bstakelum.github.io/Waveform-Synthesizer/
 
-# TU821 Final Year Project — Waveform Synthesizer
+# Waveform Synthesizer
 
-This browser app captures a waveform trace from camera input and turns it into a playable wavetable.
+This project is a browser-based learning tool for basic signal analysis and wavetable synthesis.
+It lets a user capture a waveform from a camera image, turn that trace into audio, and view the result as a waveform and FFT spectrum.
+
 It was built as part of the TU821 Honours Degree in Electrical and Electronic Engineering at Technological University Dublin.
 
-## Current Features
+## What the App Does
 
-- Camera capture with front/back toggle and ROI selection.
-- Image preprocessing pipeline with processed-frame preview.
-- Waveform extraction with confidence-based trimming and gap filling.
-- Test signal generator (sine/cosine/square/triangle, configurable periods).
-- Wavetable playback with adjustable panel period (ms).
-- Frequency spectrum view with linear/log scale and dominant-frequency label.
-- Option to download wavetable to CSV file.
+- Starts the device camera in the browser.
+- Lets the user choose a region of interest over the video.
+- Captures one frame and cleans the image.
+- Extracts the waveform trace from the processed image.
+- Draws the recovered waveform on screen.
+- Plays the waveform as a looping wavetable.
+- Shows an FFT-based frequency spectrum.
+- Lets the user generate built-in test signals.
+- Lets the user export the prepared waveform as a CSV file.
+
+## Main Idea
+
+The app treats the extracted waveform as one repeating cycle.
+That cycle is used in two ways:
+
+1. It is drawn in the waveform panel so the user can inspect the shape.
+2. It is looped as a wavetable so the user can hear it.
+
+The spectrum panel then shows the frequency content of that repeating waveform using an FFT.
+
+## User Flow
+
+1. Start the camera.
+2. Adjust the ROI so it covers the waveform you want to capture.
+3. Capture a frame.
+4. Let the app clean the image and extract the waveform.
+5. View the recovered waveform.
+6. Play the synthesized sound.
+7. Change the panel period to hear the pitch change.
+8. Switch the spectrum between linear and log view if needed.
+
+The test signal panel can be used instead of the camera when checking the audio and spectrum features.
 
 ## Project Files
 
-- index.html: Page layout and UI structure.
-- style.css: App styling for layout and panels.
-- app.js: Main app flow that connects all modules.
-- cameraController.js: Camera start/stop, ROI sliders, and overlay drawing.
-- imageProcessing.js: Image cleanup steps that make the waveform line easier to detect.
-- waveformExtractor.js: Waveform line detection, trimming, and post-processing.
-- audioEngine.js: Wavetable synthesis and spectrum rendering.
+- [index.html](index.html): page structure and controls.
+- [style.css](style.css): layout and visual styling.
+- [app.js](app.js): main app flow and UI wiring.
+- [cameraController.js](cameraController.js): camera start/stop, ROI controls, and frame capture.
+- [imageProcessing.js](imageProcessing.js): image cleanup before waveform extraction.
+- [waveformExtractor.js](waveformExtractor.js): trace detection, trimming, gap filling, and centering.
+- [audioEngine.js](audioEngine.js): wavetable playback, CSV export, and FFT spectrum drawing.
 
-## How the Pipeline Works
+## How the Processing Pipeline Works
 
-1. Start the camera and set the ROI using the sliders.
-2. Capture a clean frame from the video.
-3. Clean the image so the waveform trace is easier to separate from background noise.
-4. Detect the waveform path from the processed image.
-5. Trim weak/noisy parts at the start and end of the path.
-6. Fill short gaps, center the waveform, and draw it to the waveform panel.
-7. Send the waveform data to the audio module.
-8. Optional download of prepared wavetable to CSV file
+### 1. Camera Capture
 
-## Audio Synthesis
+The app captures a single video frame from the selected camera.
+The ROI sliders are used to limit the part of the image that matters.
 
-The audio module plays the waveform as a looping wavetable tone.
-The loop period is user-adjustable via the Panel Period (ms) input in the waveform panel.
+### 2. Image Cleanup
 
-- Non-numeric waveform points are removed and zeroed.
-- DC offset is removed before playback.
-- Waveform is upsampled to 16-bit sample array with linear interpolation.
-- The wavetable loops continuously, and playback rate is adjusted to match the selected panel period.
+The captured frame is processed to make the waveform line easier to separate from the background.
+This stage includes:
 
-### What You Should Hear
+- grayscale conversion
+- light denoising
+- uneven-lighting reduction
+- contrast stretching
+- thresholding
+- small-noise removal
+- keeping the main bright connected region
 
-- More periods (oscillations) packed into the same captured sample space will sound higher in pitch.
-- Fewer periods in that same space will sound lower in pitch.
-- Changing Panel Period (ms) changes the base loop frequency.
+### 3. Waveform Extraction
 
-## Spectrum Notes
+The extractor follows the waveform line from left to right.
+It uses a center-of-mass style estimate, trims weak edges, fills short gaps, and centers the final waveform around zero.
 
-- Spectrum magnitudes are computed with Goertzel bins.
-- The displayed peak frequency uses a denser search pass, so it is not limited to bar centers.
-- Linear and log modes change visual spacing, not the underlying waveform data.
+### 4. Wavetable Playback
 
-## Tuning Guide
+The final waveform is stored as a single-cycle wavetable.
+When playback starts, the waveform is looped continuously.
+The panel period control changes how long one full cycle takes, which changes the pitch.
 
-### Image Processing (imageProcessing.js)
+### 5. Spectrum Display
 
-- flattenKernelRadius: how large the local background estimate is.
-- flattenBias: brightness offset after lighting flattening.
-- contrastLowPercentile / contrastHighPercentile: contrast stretch range.
-- minIsolatedNeighborCount: how aggressively tiny noise dots are removed.
-- erodeMinForegroundCount: how strongly thin mask areas are cleaned.
+The spectrum is calculated with a custom FFT.
+The display samples that FFT at the center of each bar.
+The Nyquist line is shown as a guide to the highest frequency a sampled waveform can represent without aliasing.
 
-### Waveform Extraction (waveformExtractor.js)
+This was chosen because:
 
-- DEFAULT_FOREGROUND_CUTOFF: minimum brightness treated as foreground.
-- CENTER_OF_MASS_CONFIG.bandHalfWidth: vertical search range around the predicted path.
-- CENTER_OF_MASS_CONFIG.maxJumpPx: maximum allowed vertical jump between columns.
-- TRIM_CONFIDENCE_CONFIG: settings for trace start/end trimming.
-- WAVEFORM_POSTPROCESSING_CONFIG.interpolationMaxGap: largest missing gap that will be filled.
+- it keeps the implementation simple
+- it matches the waveform shown on screen
+- it works even when audio is not currently playing
+- it is easier to explain as an educational tool
 
-### Audio (audioEngine.js)
+The spectrum is intended as a learning aid, not a precision measurement instrument. 
 
-- MAX_INTERPOLATED_SAMPLES: cap used when choosing integer-multiple upsampling.
-- MIN_PANEL_DURATION_SECONDS / MAX_PANEL_DURATION_SECONDS: panel period bounds.
-- SPECTRUM_BAR_COUNT: number of visual bars.
-- PEAK_ESTIMATE_COARSE_STEPS / PEAK_ESTIMATE_REFINE_STEPS: dominant-frequency search density.
+## Controls
+
+### Camera Controls
+
+- `Start Camera`: starts or stops the video stream
+- `Capture Frame`: captures the current frame for processing
+- `Reset ROI`: resets the ROI to the full frame
+- `Front/Back`: switches between available cameras
+
+### Waveform Controls
+
+- `Play`: starts or stops the synthesized waveform
+- `Panel Period (ms)`: changes the playback period of one waveform cycle
+- `Download Waveform (.csv)`: exports the prepared waveform data
+
+### Spectrum Controls
+
+- `Scale`: switches between linear and logarithmic frequency spacing
+
+### Test Signal Controls
+
+- `Waveform`: chooses the test waveform shape
+- `Periods`: sets how many cycles appear across the sample window
+- `Generate Test Signal`: loads the test waveform into the app
+
+## Notes for Testing
+
+- A clean, high-contrast waveform image will give the best extraction result.
+- The ROI should be kept as tight as possible around the waveform of interest.
+- The test signal panel is useful for checking playback and spectrum behavior without using the camera.
+- The spectrum is normalized for display, so it is best used for comparing shapes and peaks visually rather than reading absolute magnitudes.
+
+## Tuning Areas
+
+These files contain the main tuning values if you want to adjust behavior later:
+
+- [imageProcessing.js](imageProcessing.js): lighting flattening, contrast, thresholding, and noise cleanup values
+- [waveformExtractor.js](waveformExtractor.js): path tracking, trimming, and gap filling values
+- [audioEngine.js](audioEngine.js): playback period limits, spectrum bar count, and display frequency range
+
+## Running the Project
+
+This is a plain browser project with ES modules.
+Open it through a local web server or static hosting so the module imports and camera access work correctly.
 
 ## License
 
