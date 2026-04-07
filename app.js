@@ -38,6 +38,8 @@ const waveformPeriodInput = document.getElementById('waveformPeriodMs');
 const waveformPeriodValue = document.getElementById('waveformPeriodValue');
 const spectrumCanvas = document.getElementById('spectrumCanvas');
 const processingCanvas = document.getElementById('processingCanvas');
+const video = document.getElementById('video');
+const videoWrapper = video?.closest('.video-wrapper') ?? null;
 const spectrumScaleSelect = document.getElementById('spectrumScale');
 const testSignalButton = document.getElementById('testSignal');
 const testSignalTypeSelect = document.getElementById('testSignalType');
@@ -64,7 +66,7 @@ updateWaveformPeriodNote();
 const imageProcessor = createImageProcessor({});
 // Create the camera controller.
 const cameraController = createCameraController({
-  video: document.getElementById('video'),
+  video,
   processingCanvas,
   startButton: document.getElementById('startCamera'),
   captureButton: document.getElementById('captureFrame'),
@@ -88,6 +90,7 @@ const cameraController = createCameraController({
 });
 
 cameraController.init();
+initializeInfoBoxViewportBounds();
 // Hook up the spectrum controls and test signal button.
 if (spectrumScaleSelect) {
   spectrumScaleSelect.addEventListener('change', (event) => {
@@ -123,6 +126,8 @@ function initializeCanvasSizes(width, height) {
   const safeWidth = Math.max(320, Math.round(width));
   const safeHeight = Math.max(180, Math.round(height));
 
+  syncVideoWrapperAspectRatio(safeWidth, safeHeight);
+
   waveformCanvas.width = safeWidth;
   waveformCanvas.height = safeHeight;
 
@@ -135,6 +140,42 @@ function initializeCanvasSizes(width, height) {
     processingCanvas.width = safeWidth;
     processingCanvas.height = safeHeight;
   }
+}
+
+function syncVideoWrapperAspectRatio(width, height) {
+  if (!videoWrapper || width <= 0 || height <= 0) return;
+  videoWrapper.style.setProperty('--video-aspect-ratio', `${width} / ${height}`);
+}
+
+function initializeInfoBoxViewportBounds() {
+  const infoTriggers = document.querySelectorAll('.info-inline');
+
+  function clampInfoBoxToViewport(infoInline) {
+    const infoBox = infoInline.querySelector('.info-box');
+    if (!infoBox) return;
+    const viewportPadding = 12;
+
+    infoBox.style.setProperty('--info-box-shift', '0px');
+
+    const triggerRect = infoInline.getBoundingClientRect();
+    const boxWidth = infoBox.offsetWidth;
+    const triggerCenterX = triggerRect.left + (triggerRect.width / 2);
+    const minCenterX = viewportPadding + (boxWidth / 2);
+    const maxCenterX = window.innerWidth - viewportPadding - (boxWidth / 2);
+    const clampedCenterX = Math.min(maxCenterX, Math.max(minCenterX, triggerCenterX));
+    const shift = clampedCenterX - triggerCenterX;
+
+    infoBox.style.setProperty('--info-box-shift', `${Math.round(shift)}px`);
+  }
+
+  infoTriggers.forEach((infoInline) => {
+    infoInline.addEventListener('mouseenter', () => clampInfoBoxToViewport(infoInline));
+    infoInline.addEventListener('focusin', () => clampInfoBoxToViewport(infoInline));
+  });
+
+  window.addEventListener('resize', () => {
+    infoTriggers.forEach(clampInfoBoxToViewport);
+  });
 }
 
 function updateWaveformPeriodNote() {
