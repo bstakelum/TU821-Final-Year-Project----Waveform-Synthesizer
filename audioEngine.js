@@ -10,9 +10,9 @@ export function createSynthAudioEngine({
   const DEFAULT_PANEL_DURATION_SECONDS = 0.01;
   const MIN_PANEL_DURATION_SECONDS = 0.001; // 1 ms
   const MAX_PANEL_DURATION_SECONDS = 0.015; // 15 ms
-  const ATTACK_SECONDS = 0.005;
-  const RELEASE_SECONDS = 0.005;
-  const SPECTRUM_BAR_COUNT = 100;
+  const ATTACK_SECONDS = 0.01;
+  const RELEASE_SECONDS = 0.01;
+  const SPECTRUM_BAR_COUNT = 160;
   const SPECTRUM_MIN_HZ = 20;
   const SPECTRUM_MAX_HZ = 40000;
   const DEFAULT_SPECTRUM_SCALE = 'linear';
@@ -291,18 +291,37 @@ export function createSynthAudioEngine({
     const binWidthHz = sampleRateHz / fftSize;
 
     for (let i = 0; i < bars; i++) {
-      const centerHz = getFrequencyAtRatio((i + 0.5) / bars, minHz, maxHz, scale);
+      const startHz = getFrequencyAtRatio(i / bars, minHz, maxHz, scale);
+      const endHz = getFrequencyAtRatio((i + 1) / bars, minHz, maxHz, scale);
+      const clampedStartHz = Math.max(0, startHz);
+      const clampedEndHz = Math.min(endHz, nyquistHz);
 
-      if (centerHz <= 0 || centerHz > nyquistHz) {
+      if (clampedEndHz <= clampedStartHz) {
         out[i] = 0;
         continue;
       }
 
-      const binIndex = Math.min(
-        magnitudes.length - 1,
-        Math.max(0, Math.round(centerHz / binWidthHz)),
-      );
-      out[i] = magnitudes[binIndex];
+      const startBin = Math.max(0, Math.ceil(clampedStartHz / binWidthHz));
+      const endBin = Math.min(magnitudes.length - 1, Math.floor(clampedEndHz / binWidthHz));
+
+      if (endBin < startBin) {
+        const centerHz = 0.5 * (clampedStartHz + clampedEndHz);
+        const fallbackBin = Math.min(
+          magnitudes.length - 1,
+          Math.max(0, Math.round(centerHz / binWidthHz)),
+        );
+        out[i] = magnitudes[fallbackBin];
+        continue;
+      }
+
+      let maxMagnitude = 0;
+      for (let bin = startBin; bin <= endBin; bin++) {
+        if (magnitudes[bin] > maxMagnitude) {
+          maxMagnitude = magnitudes[bin];
+        }
+      }
+
+      out[i] = maxMagnitude;
     }
 
     return out;
@@ -390,6 +409,19 @@ export function createSynthAudioEngine({
       spectrumCtx.fillRect(x, y, widthPx, barHeight);
     }
 
+    // Shade frequencies that are outside the current Nyquist limit.
+    if (nyquistHz > minDisplayHz && nyquistHz < maxDisplayHz) {
+      const nyquistRatio = spectrumScale === 'log'
+        ? Math.log(nyquistHz / minDisplayHz) / Math.log(maxDisplayHz / minDisplayHz)
+        : (nyquistHz - minDisplayHz) / (maxDisplayHz - minDisplayHz);
+      const nx = Math.round(plotX + nyquistRatio * plotWidth);
+
+      spectrumCtx.save();
+      spectrumCtx.fillStyle = 'rgba(100, 116, 139, 0.16)';
+      spectrumCtx.fillRect(nx, plotY, plotX + plotWidth - nx, plotHeight);
+      spectrumCtx.restore();
+    }
+
     // Draw vertical Nyquist line
     if (nyquistHz > minDisplayHz && nyquistHz < maxDisplayHz) {
       const nyquistRatio = spectrumScale === 'log'
@@ -397,7 +429,7 @@ export function createSynthAudioEngine({
         : (nyquistHz - minDisplayHz) / (maxDisplayHz - minDisplayHz);
       const nx = Math.round(plotX + nyquistRatio * plotWidth);
       spectrumCtx.save();
-      spectrumCtx.strokeStyle = '#00e0ff';
+      spectrumCtx.strokeStyle = '#b3ff00';
       spectrumCtx.lineWidth = 2;
       spectrumCtx.setLineDash([3, 3]);
       spectrumCtx.beginPath();
@@ -463,7 +495,7 @@ export function createSynthAudioEngine({
     let legendY = plotY + 18;
     for (let i = 0; i < legendLines.length; i++) {
       let color = '#cbd5e1';
-      if (legendLines[i].includes('Nyquist')) color = '#00e0ff';
+      if (legendLines[i].includes('Nyquist')) color = '#b3ff00';
       if (legendLines[i].includes('Human Hearing')) color = '#ffb300';
       spectrumCtx.fillStyle = color;
       spectrumCtx.fillText(legendLines[i], plotX + plotWidth - 2, legendY);
