@@ -53,8 +53,11 @@ export function extractWaveformFromImageData(imageData, options = {}) {
   const rawTracePath = findCenterOfMassTracePath(imageData, foregroundCutoff, roiBounds);
   const tracePath = trimTracePathByConfidence(rawTracePath, imageData, foregroundCutoff, roiBounds);
 
-  const normYMin = roiBounds ? roiBounds.yMin : 0;
-  const normYMax = roiBounds ? roiBounds.yMax : height - 1;
+  // Keep waveform scaling tied to the full frame height.
+  // The ROI limits where the trace can be found, but it should not compress the
+  // waveform into a smaller vertical range and then stretch it back out later.
+  const normYMin = 0;
+  const normYMax = height - 1;
   const normYSpan = Math.max(1, normYMax - normYMin);
 
   const waveform = new Float32Array(width);
