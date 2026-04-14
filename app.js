@@ -48,6 +48,9 @@ const testSignalPeriodsInput = document.getElementById('testSignalPeriods');
 const waveformForegroundCutoff = 200; // Brightness level used to decide what counts as waveform.
 const DEFAULT_STARTUP_WIDTH = 640;
 const DEFAULT_STARTUP_HEIGHT = 480;
+const MOBILE_CAMERA_ASPECT_RATIO = 1;
+const DESKTOP_CAMERA_ASPECT_RATIO = 4 / 3;
+const DEVICE_MODE_MEDIA_QUERY = window.matchMedia('(pointer: coarse), (max-width: 900px)');
 // Create the audio and spectrum module.
 const synthEngine = createSynthAudioEngine({
   playButton: document.getElementById('playSynth'),
@@ -59,7 +62,8 @@ const MIN_PANEL_PERIOD_MS = 1;
 const MAX_PANEL_PERIOD_MS = 15;
 
 // Give the canvases a sensible size before the camera reports its real size.
-initializeCanvasSizes(DEFAULT_STARTUP_WIDTH, DEFAULT_STARTUP_HEIGHT);
+initializeCanvasSizes(DEFAULT_STARTUP_WIDTH, getDefaultStartupHeight());
+applyResponsiveDeviceMode();
 updateWaveformPeriodNote();
 
 // Create the image cleanup pipeline.
@@ -73,6 +77,7 @@ const cameraController = createCameraController({
   cameraControls: document.getElementById('cameraControls'),
   cameraToggleButton: document.getElementById('cameraToggle'),
   resetROIButton: document.getElementById('resetROI'),
+  getTargetAspectRatio: getPreferredCameraAspectRatio,
   roiElements: {
     topInput: document.getElementById('roiTop'),
     bottomInput: document.getElementById('roiBottom'),
@@ -91,6 +96,7 @@ const cameraController = createCameraController({
 
 cameraController.init();
 initializeInfoBoxViewportBounds();
+bindResponsiveDeviceMode();
 // Hook up the spectrum controls and test signal button.
 if (spectrumScaleSelect) {
   spectrumScaleSelect.addEventListener('change', (event) => {
@@ -140,6 +146,35 @@ function initializeCanvasSizes(width, height) {
     processingCanvas.width = safeWidth;
     processingCanvas.height = safeHeight;
   }
+}
+
+function getPreferredCameraAspectRatio() {
+  return DEVICE_MODE_MEDIA_QUERY.matches ? MOBILE_CAMERA_ASPECT_RATIO : DESKTOP_CAMERA_ASPECT_RATIO;
+}
+
+function getDefaultStartupHeight() {
+  const startupAspectRatio = getPreferredCameraAspectRatio();
+  return Math.max(DEFAULT_STARTUP_HEIGHT, Math.round(DEFAULT_STARTUP_WIDTH / startupAspectRatio));
+}
+
+function applyResponsiveDeviceMode() {
+  const mode = DEVICE_MODE_MEDIA_QUERY.matches ? 'mobile' : 'desktop';
+  document.documentElement.dataset.deviceMode = mode;
+}
+
+function bindResponsiveDeviceMode() {
+  const handleModeChange = () => {
+    applyResponsiveDeviceMode();
+    cameraController.refreshPreviewLayout?.();
+  };
+
+  if (typeof DEVICE_MODE_MEDIA_QUERY.addEventListener === 'function') {
+    DEVICE_MODE_MEDIA_QUERY.addEventListener('change', handleModeChange);
+  } else if (typeof DEVICE_MODE_MEDIA_QUERY.addListener === 'function') {
+    DEVICE_MODE_MEDIA_QUERY.addListener(handleModeChange);
+  }
+
+  window.addEventListener('orientationchange', handleModeChange);
 }
 
 function syncVideoWrapperAspectRatio(width, height) {
