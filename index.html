@@ -41,7 +41,7 @@
                   <span class="info-box" role="tooltip">ROI means Region of Interest. It is the part of the camera image the app will use when looking for the waveform.</span>
                 </span>
               </div>
-              <p class="roi-hint">Drag inside the box to move it. Drag an edge or corner to resize it.</p>
+              <p class="roi-hint">Drag inside the box to move it. Drag an edge or corner to resize it. On touch devices, use two fingers to resize.</p>
             </div>
           </div>
         </div>
@@ -82,6 +82,16 @@
     <div class="right-column">
         <div class="panel">
         <h2>Analysis</h2>
+          <div class="waveform-card preview-card">
+            <h3>Processed Capture
+              <span class="info-inline">
+                <button class="info-trigger" type="button" aria-label="What is the processed capture preview?">?</button>
+                <span class="info-box" role="tooltip">This preview shows the cleaned black-and-white image that the waveform extractor uses after image processing.</span>
+              </span>
+            </h3>
+            <canvas id="processedPreviewCanvas"></canvas>
+          </div>
+
           <div class="waveform-card">
             <h3>Synthesized Waveform
               <span class="info-inline">

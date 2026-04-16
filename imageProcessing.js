@@ -9,6 +9,11 @@ export function createImageProcessor({
     flattenKernelRadiusRatio: 0.03, // Scales the background estimate to larger mobile captures.
     flattenBias: 118, // Brightness added back after flattening so the line stays visible.
     flattenGain: 1.25, // Extra emphasis for dark line contrast after lighting removal.
+    localContrastFloor: 16, // Minimum amount a pixel must rise above its local neighborhood.
+    localThresholdRadius: 15, // Minimum width of the local threshold neighborhood.
+    localThresholdRadiusRatio: 0.06, // Scales local thresholding to larger mobile captures.
+    localThresholdBias: 8, // Extra margin above the local mean before a pixel is considered foreground.
+    localThresholdStdWeight: 0.35, // Raises the local threshold slightly in noisy regions.
     contrastLowPercentile: 2, // Dark end used when stretching contrast.
     contrastHighPercentile: 98, // Bright end used when stretching contrast.
     minIsolatedNeighborCount: 8, // Removes lone bright pixels that look like noise.
@@ -17,6 +22,8 @@ export function createImageProcessor({
     hysteresisLowPercentile: 62, // Dimmer pixels kept only when they touch strong pixels.
     minComponentSizePixels: 50, // Small blobs below this size are discarded.
     minComponentWidthRatio: 0.10, // Preferred width for waveform-like components, used as a soft ranking cue.
+    maxComponentFillRatio: 0.4, // Rejects large filled blobs that are unlikely to be a thin waveform trace.
+    maxComponentHeightRatio: 0.6, // Rejects components that cover too much of the frame height.
   };
 
   // Reuse working buffers so each frame does not keep allocating new arrays.
@@ -67,28 +74,29 @@ export function createImageProcessor({
     denoiseImage(width, height, bufferA, bufferB);
     flattenIllumination(width, height, bufferB, bufferA);
     enhanceContrast(bufferA, bufferB);
+    suppressShadowRegions(width, height, bufferB, bufferA);
     
     // Keep strong line pixels and nearby weaker ones.
-    applyHysteresisThreshold(bufferB, bufferA, 
+    applyHysteresisThreshold(bufferA, bufferB, 
       defaultConfig.hysteresisHighPercentile,
       defaultConfig.hysteresisLowPercentile);
     
     // Join short horizontal breaks in the line.
-    horizontalClose(width, height, bufferA, bufferB, 2);
+    horizontalClose(width, height, bufferB, bufferA, 2);
     
     // Keep the largest bright shape and drop the rest.
-    filterByConnectedComponents(width, height, bufferB, 
+    filterByConnectedComponents(width, height, bufferA, 
       defaultConfig.minComponentSizePixels);
     
     // Copy back into the main working buffer.
-    bufferA.set(bufferB);
+    bufferB.set(bufferA);
     
     // Final small cleanup pass.
-    cleanupMask(width, height, bufferA);
+    cleanupMask(width, height, bufferB);
 
     // Build the processed image output.
     const result = new ImageData(width, height);
-    result.data.set(bufferA);
+    result.data.set(bufferB);
     return result;
   }
 
@@ -155,6 +163,12 @@ export function createImageProcessor({
     return Math.max(1, Math.max(Math.floor(defaultConfig.flattenKernelRadius), ratioRadius));
   }
 
+  function getEffectiveLocalThresholdRadius(width, height) {
+    const minDimension = Math.max(1, Math.min(width, height));
+    const ratioRadius = Math.round(minDimension * defaultConfig.localThresholdRadiusRatio);
+    return Math.max(1, Math.max(Math.floor(defaultConfig.localThresholdRadius), ratioRadius));
+  }
+
   // Reduce uneven lighting across the image.
   function flattenIllumination(width, height, srcData, dstData) {
     const radius = getEffectiveFlattenRadius(width, height);
@@ -203,6 +217,92 @@ export function createImageProcessor({
       dstData[i] = normalized;
       dstData[i + 1] = normalized;
       dstData[i + 2] = normalized;
+      dstData[i + 3] = 255;
+    }
+  }
+
+  // Suppress broad shadow regions by keeping only pixels that stand out from their local neighborhood.
+  function suppressShadowRegions(width, height, srcData, dstData) {
+    const radius = getEffectiveLocalThresholdRadius(width, height);
+    const thresholdBias = defaultConfig.localThresholdBias;
+    const stdWeight = defaultConfig.localThresholdStdWeight;
+    const contrastFloor = defaultConfig.localContrastFloor;
+    const localMean = new Uint8ClampedArray(srcData.length);
+    const localSquareMean = new Float32Array(width * height);
+    const temp = new Uint8ClampedArray(srcData.length);
+    const squareValues = new Float32Array(width * height);
+    const squareBlurX = new Float32Array(width * height);
+
+    horizontalBlur(width, height, srcData, temp, radius);
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const y0 = Math.max(0, y - radius);
+        const y1 = Math.min(height - 1, y + radius);
+        let sum = 0;
+        let count = 0;
+        for (let yy = y0; yy <= y1; yy++) {
+          sum += temp[(yy * width + x) * 4];
+          count++;
+        }
+        const idx = (y * width + x) * 4;
+        const mean = Math.round(sum / count);
+        localMean[idx] = mean;
+        localMean[idx + 1] = mean;
+        localMean[idx + 2] = mean;
+        localMean[idx + 3] = 255;
+      }
+    }
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const idx = y * width + x;
+        const pixelValue = srcData[idx * 4];
+        squareValues[idx] = pixelValue * pixelValue;
+      }
+    }
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const x0 = Math.max(0, x - radius);
+        const x1 = Math.min(width - 1, x + radius);
+        let sum = 0;
+        let count = 0;
+        for (let xx = x0; xx <= x1; xx++) {
+          sum += squareValues[y * width + xx];
+          count++;
+        }
+        squareBlurX[y * width + x] = sum / count;
+      }
+    }
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const y0 = Math.max(0, y - radius);
+        const y1 = Math.min(height - 1, y + radius);
+        let sum = 0;
+        let count = 0;
+        for (let yy = y0; yy <= y1; yy++) {
+          sum += squareBlurX[yy * width + x];
+          count++;
+        }
+        localSquareMean[y * width + x] = sum / count;
+      }
+    }
+
+    for (let i = 0; i < srcData.length; i += 4) {
+      const localMeanValue = localMean[i];
+      const localVariance = Math.max(0, localSquareMean[i / 4] - (localMeanValue * localMeanValue));
+      const localStdDev = Math.sqrt(localVariance);
+      const threshold = Math.min(255, localMeanValue + thresholdBias + (localStdDev * stdWeight));
+      const contrastAboveMean = srcData[i] - localMeanValue;
+      const keepValue = srcData[i] >= threshold && contrastAboveMean >= contrastFloor
+        ? srcData[i]
+        : 0;
+
+      dstData[i] = keepValue;
+      dstData[i + 1] = keepValue;
+      dstData[i + 2] = keepValue;
       dstData[i + 3] = 255;
     }
   }
@@ -411,12 +511,22 @@ export function createImageProcessor({
         if (component.size >= minSizePixels) {
           const widthSpan = component.maxX - component.minX + 1;
           const heightSpan = component.maxY - component.minY + 1;
+          const boundingArea = Math.max(1, widthSpan * heightSpan);
+          const fillRatio = component.size / boundingArea;
+          const heightRatio = heightSpan / Math.max(1, height);
+
+          if (fillRatio > defaultConfig.maxComponentFillRatio || heightRatio > defaultConfig.maxComponentHeightRatio) {
+            nextLabel++;
+            continue;
+          }
+
           const waveformScore = (widthSpan * widthSpan) / Math.max(1, heightSpan);
 
           components.push({
             ...component,
             widthSpan,
             heightSpan,
+            fillRatio,
             waveformScore,
           });
         }

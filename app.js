@@ -33,6 +33,8 @@ import { createSynthAudioEngine } from './audioEngine.js';
 // Main UI elements.
 const waveformCanvas = document.getElementById('waveformCanvas');
 const wctx = waveformCanvas.getContext('2d');
+const processedPreviewCanvas = document.getElementById('processedPreviewCanvas');
+const processedPreviewContext = processedPreviewCanvas?.getContext('2d') ?? null;
 const waveformPeriodNoteEl = document.getElementById('waveformPeriodNote');
 const waveformPeriodInput = document.getElementById('waveformPeriodMs');
 const waveformPeriodValue = document.getElementById('waveformPeriodValue');
@@ -86,6 +88,7 @@ const cameraController = createCameraController({
   resetROIButton: document.getElementById('resetROI'),
   roiElements: {},
   getTargetAspectRatio: getPreferredCameraAspectRatio,
+  isCoarsePointer: () => DEVICE_MODE_MEDIA_QUERY.matches,
   onVideoSize: ({ width, height }) => {
     initializeCanvasSizes(width, height);
   },
@@ -140,6 +143,11 @@ function initializeCanvasSizes(width, height) {
 
   waveformCanvas.width = safeWidth;
   waveformCanvas.height = safeHeight;
+
+  if (processedPreviewCanvas) {
+    processedPreviewCanvas.width = safeWidth;
+    processedPreviewCanvas.height = safeHeight;
+  }
 
   if (spectrumCanvas) {
     spectrumCanvas.width = safeWidth;
@@ -269,7 +277,8 @@ function handleTestSignalClick() {
   });
 
   synthEngine.updateWaveform(testWaveform);
-  
+
+  clearProcessedPreview();
   drawWaveform(testWaveform);
   enterAnalysisView();
 }
@@ -341,6 +350,8 @@ function processCapturedImage(imageData, roi) {
     return;
   }
 
+  drawProcessedPreview(processedImageData);
+
   const waveform = extractWaveformFromImageData(processedImageData, { roi });
 
   if (!waveform || waveform.length === 0) {
@@ -350,6 +361,22 @@ function processCapturedImage(imageData, roi) {
   synthEngine.updateWaveform(waveform);
   drawWaveform(waveform);
   enterAnalysisView();
+}
+
+function drawProcessedPreview(imageData) {
+  if (!processedPreviewCanvas || !processedPreviewContext || !imageData) return;
+
+  if (processedPreviewCanvas.width !== imageData.width || processedPreviewCanvas.height !== imageData.height) {
+    processedPreviewCanvas.width = imageData.width;
+    processedPreviewCanvas.height = imageData.height;
+  }
+
+  processedPreviewContext.putImageData(imageData, 0, 0);
+}
+
+function clearProcessedPreview() {
+  if (!processedPreviewCanvas || !processedPreviewContext) return;
+  processedPreviewContext.clearRect(0, 0, processedPreviewCanvas.width, processedPreviewCanvas.height);
 }
 
 function isMobileViewMode() {
@@ -363,14 +390,17 @@ function setMobileView(mode) {
 
 function enterAnalysisView() {
   if (!isMobileViewMode()) return;
-  cameraController.stopCamera?.();
+  cameraController.setPreviewActive?.(false);
   setMobileView(MOBILE_VIEW_MODES.ANALYSIS);
 }
 
 function enterGenerationView({ startCamera = false } = {}) {
   if (!isMobileViewMode()) return;
   setMobileView(MOBILE_VIEW_MODES.GENERATION);
-  if (startCamera) {
+  if (cameraController.isCameraRunning?.()) {
+    cameraController.setPreviewActive?.(true);
+    cameraController.refreshPreviewLayout?.();
+  } else if (startCamera) {
     void cameraController.startCamera?.();
   }
 }

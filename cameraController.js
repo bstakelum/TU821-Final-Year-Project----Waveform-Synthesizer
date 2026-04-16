@@ -11,13 +11,15 @@ export function createCameraController({
   cameraToggleButton,
   resetROIButton,
   getTargetAspectRatio,
+  isCoarsePointer,
   roiElements,
   onCapture,
   onVideoSize,
 }) {
   const ROI_MIN_GAP_RATIO = 0.01;
-  const ROI_HANDLE_HIT_PADDING_PX = 18;
-  const ROI_HANDLE_SIZE_PX = 10;
+  const ROI_HANDLE_HIT_PADDING_CSS_PX = 18;
+  const ROI_HANDLE_SIZE_CSS_PX = 14;
+  const ROI_TOUCH_TARGET_PADDING_CSS_PX = 28;
   const ROI_MIN_HEIGHT_PX = 2;
   const ROI_MIN_WIDTH_PX = 2;
 
@@ -27,6 +29,7 @@ export function createCameraController({
 
   let currentStream = null;
   let overlayAnimationId = null;
+  let previewActive = true;
   let preferredFacing = 'user';
   let roiControlsBound = false;
   let currentFrameRect = { x: 0, y: 0, width: 0, height: 0 };
@@ -35,6 +38,8 @@ export function createCameraController({
   let roiLeftPct = 0.0;
   let roiRightPct = 1.0;
   let roiPointerState = null;
+  const roiTouchPoints = new Map();
+  let roiTouchState = null;
 
   const {
     topInput,
@@ -97,6 +102,7 @@ export function createCameraController({
       currentStream = stream;
       video.srcObject = stream;
 
+      previewActive = true;
       startOverlayLoop();
       if (cameraControls) cameraControls.classList.remove('hidden');
       if (startButton) startButton.textContent = 'Stop Camera';
@@ -112,10 +118,36 @@ export function createCameraController({
 
     currentStream = null;
     video.srcObject = null;
+    previewActive = false;
     stopOverlayLoop();
     if (cameraControls) cameraControls.classList.add('hidden');
     if (startButton) startButton.textContent = 'Start Camera';
     pctx.clearRect(0, 0, processingCanvas.width, processingCanvas.height);
+  }
+
+  function setPreviewActive(isActive) {
+    previewActive = !!isActive;
+
+    if (!currentStream) {
+      if (!previewActive) {
+        stopOverlayLoop();
+        pctx.clearRect(0, 0, processingCanvas.width, processingCanvas.height);
+      }
+      return;
+    }
+
+    if (previewActive) {
+      syncPreviewFrameRect();
+      startOverlayLoop();
+      return;
+    }
+
+    stopOverlayLoop();
+    pctx.clearRect(0, 0, processingCanvas.width, processingCanvas.height);
+  }
+
+  function isCameraRunning() {
+    return !!currentStream;
   }
 
   function getVideoSourceSize() {
@@ -316,12 +348,51 @@ export function createCameraController({
     };
   }
 
+  function getOverlayMetrics() {
+    const bounds = processingCanvas.getBoundingClientRect();
+    const scaleX = bounds.width > 0 ? processingCanvas.width / bounds.width : 1;
+    const scaleY = bounds.height > 0 ? processingCanvas.height / bounds.height : 1;
+    const averageScale = (scaleX + scaleY) / 2;
+
+    return {
+      hitPaddingX: ROI_HANDLE_HIT_PADDING_CSS_PX * scaleX,
+      hitPaddingY: ROI_HANDLE_HIT_PADDING_CSS_PX * scaleY,
+      touchPaddingX: ROI_TOUCH_TARGET_PADDING_CSS_PX * scaleX,
+      touchPaddingY: ROI_TOUCH_TARGET_PADDING_CSS_PX * scaleY,
+      handleWidth: ROI_HANDLE_SIZE_CSS_PX * scaleX,
+      handleHeight: ROI_HANDLE_SIZE_CSS_PX * scaleY,
+      lineWidth: Math.max(2, Math.round(2 * averageScale)),
+      dashLength: Math.max(4, Math.round(6 * averageScale)),
+      dashGap: Math.max(3, Math.round(4 * averageScale)),
+    };
+  }
+
+  function isTouchInteractionMode(event) {
+    const coarsePointer = typeof isCoarsePointer === 'function'
+      ? !!isCoarsePointer()
+      : window.matchMedia('(pointer: coarse)').matches;
+
+    if (!coarsePointer) return false;
+    if (!event) return coarsePointer;
+    return event.pointerType !== 'mouse';
+  }
+
+  function snapshotROI() {
+    return {
+      leftPct: roiLeftPct,
+      topPct: roiTopPct,
+      rightPct: roiRightPct,
+      bottomPct: roiBottomPct,
+    };
+  }
+
   function getROIHitMode(pointerX, pointerY) {
     const roi = computeROI();
-    const nearLeft = Math.abs(pointerX - roi.x) <= ROI_HANDLE_HIT_PADDING_PX;
-    const nearRight = Math.abs(pointerX - (roi.x + roi.width)) <= ROI_HANDLE_HIT_PADDING_PX;
-    const nearTop = Math.abs(pointerY - roi.y) <= ROI_HANDLE_HIT_PADDING_PX;
-    const nearBottom = Math.abs(pointerY - (roi.y + roi.height)) <= ROI_HANDLE_HIT_PADDING_PX;
+    const metrics = getOverlayMetrics();
+    const nearLeft = Math.abs(pointerX - roi.x) <= metrics.hitPaddingX;
+    const nearRight = Math.abs(pointerX - (roi.x + roi.width)) <= metrics.hitPaddingX;
+    const nearTop = Math.abs(pointerY - roi.y) <= metrics.hitPaddingY;
+    const nearBottom = Math.abs(pointerY - (roi.y + roi.height)) <= metrics.hitPaddingY;
     const insideX = pointerX >= roi.x && pointerX <= roi.x + roi.width;
     const insideY = pointerY >= roi.y && pointerY <= roi.y + roi.height;
 
@@ -336,6 +407,15 @@ export function createCameraController({
     if (insideX && insideY) return 'move';
 
     return null;
+  }
+
+  function isPointerNearROI(pointerX, pointerY) {
+    const roi = computeROI();
+    const metrics = getOverlayMetrics();
+    return pointerX >= roi.x - metrics.touchPaddingX
+      && pointerX <= roi.x + roi.width + metrics.touchPaddingX
+      && pointerY >= roi.y - metrics.touchPaddingY
+      && pointerY <= roi.y + roi.height + metrics.touchPaddingY;
   }
 
   function applyROIDrag(mode, deltaXPx, deltaYPx, startROI) {
@@ -366,6 +446,127 @@ export function createCameraController({
     clampROI(nextLeftPct, nextTopPct, nextRightPct, nextBottomPct);
   }
 
+  function beginTouchMoveGesture(pointerId, pointer) {
+    roiTouchState = {
+      type: 'move',
+      pointerIds: [pointerId],
+      startCenterX: pointer.x,
+      startCenterY: pointer.y,
+      startROI: snapshotROI(),
+    };
+  }
+
+  function beginTouchPinchGesture() {
+    const points = Array.from(roiTouchPoints.entries()).slice(0, 2);
+    if (points.length < 2) return;
+
+    const [[firstId, firstPoint], [secondId, secondPoint]] = points;
+    const centerX = (firstPoint.x + secondPoint.x) / 2;
+    const centerY = (firstPoint.y + secondPoint.y) / 2;
+    const startDistance = Math.hypot(secondPoint.x - firstPoint.x, secondPoint.y - firstPoint.y);
+
+    roiTouchState = {
+      type: 'pinch',
+      pointerIds: [firstId, secondId],
+      startCenterX: centerX,
+      startCenterY: centerY,
+      startDistance: Math.max(1, startDistance),
+      startROI: snapshotROI(),
+    };
+  }
+
+  function applyROIPinch(currentPoints, touchState) {
+    if (!touchState || currentPoints.length < 2) return;
+
+    const [firstPoint, secondPoint] = currentPoints;
+    const centerX = (firstPoint.x + secondPoint.x) / 2;
+    const centerY = (firstPoint.y + secondPoint.y) / 2;
+    const currentDistance = Math.max(1, Math.hypot(secondPoint.x - firstPoint.x, secondPoint.y - firstPoint.y));
+    const scale = currentDistance / Math.max(1, touchState.startDistance);
+    const width = Math.max(1, processingCanvas.width);
+    const height = Math.max(1, processingCanvas.height);
+    const deltaCenterXPct = (centerX - touchState.startCenterX) / width;
+    const deltaCenterYPct = (centerY - touchState.startCenterY) / height;
+    const startWidthPct = touchState.startROI.rightPct - touchState.startROI.leftPct;
+    const startHeightPct = touchState.startROI.bottomPct - touchState.startROI.topPct;
+    const nextWidthPct = startWidthPct * scale;
+    const nextHeightPct = startHeightPct * scale;
+    const centerXPct = ((touchState.startROI.leftPct + touchState.startROI.rightPct) / 2) + deltaCenterXPct;
+    const centerYPct = ((touchState.startROI.topPct + touchState.startROI.bottomPct) / 2) + deltaCenterYPct;
+
+    clampROI(
+      centerXPct - (nextWidthPct / 2),
+      centerYPct - (nextHeightPct / 2),
+      centerXPct + (nextWidthPct / 2),
+      centerYPct + (nextHeightPct / 2),
+    );
+  }
+
+  function handleTouchPointerDown(event, pointer) {
+    if (!isPointerNearROI(pointer.x, pointer.y) && roiTouchPoints.size === 0) {
+      return;
+    }
+
+    roiTouchPoints.set(event.pointerId, pointer);
+    processingCanvas.setPointerCapture(event.pointerId);
+
+    if (roiTouchPoints.size >= 2) {
+      beginTouchPinchGesture();
+    } else {
+      beginTouchMoveGesture(event.pointerId, pointer);
+    }
+
+    event.preventDefault();
+  }
+
+  function handleTouchPointerMove(event, pointer) {
+    if (!roiTouchPoints.has(event.pointerId)) return;
+
+    roiTouchPoints.set(event.pointerId, pointer);
+
+    if (roiTouchPoints.size >= 2) {
+      if (!roiTouchState || roiTouchState.type !== 'pinch') {
+        beginTouchPinchGesture();
+      }
+
+      const pinchPoints = roiTouchState.pointerIds
+        .map((pointerId) => roiTouchPoints.get(pointerId))
+        .filter(Boolean);
+      applyROIPinch(pinchPoints, roiTouchState);
+    } else if (roiTouchState?.type === 'move' && roiTouchState.pointerIds[0] === event.pointerId) {
+      applyROIDrag(
+        'move',
+        pointer.x - roiTouchState.startCenterX,
+        pointer.y - roiTouchState.startCenterY,
+        roiTouchState.startROI,
+      );
+    }
+
+    syncROIDisplay();
+    event.preventDefault();
+  }
+
+  function endTouchPointerInteraction(event) {
+    if (processingCanvas.hasPointerCapture(event.pointerId)) {
+      processingCanvas.releasePointerCapture(event.pointerId);
+    }
+
+    roiTouchPoints.delete(event.pointerId);
+
+    if (roiTouchPoints.size >= 2) {
+      beginTouchPinchGesture();
+      return;
+    }
+
+    if (roiTouchPoints.size === 1) {
+      const [[pointerId, pointer]] = Array.from(roiTouchPoints.entries());
+      beginTouchMoveGesture(pointerId, pointer);
+      return;
+    }
+
+    roiTouchState = null;
+  }
+
   function bindROIInteractionHandlers() {
     if (!processingCanvas) return;
 
@@ -373,6 +574,11 @@ export function createCameraController({
       if (!currentStream) return;
 
       const pointer = getPointerPosition(event);
+      if (isTouchInteractionMode(event)) {
+        handleTouchPointerDown(event, pointer);
+        return;
+      }
+
       const mode = getROIHitMode(pointer.x, pointer.y);
       if (!mode) return;
 
@@ -381,12 +587,7 @@ export function createCameraController({
         mode,
         startX: pointer.x,
         startY: pointer.y,
-        startROI: {
-          leftPct: roiLeftPct,
-          topPct: roiTopPct,
-          rightPct: roiRightPct,
-          bottomPct: roiBottomPct,
-        },
+        startROI: snapshotROI(),
       };
 
       processingCanvas.setPointerCapture(event.pointerId);
@@ -395,6 +596,11 @@ export function createCameraController({
 
     processingCanvas.addEventListener('pointermove', (event) => {
       const pointer = getPointerPosition(event);
+
+      if (isTouchInteractionMode(event)) {
+        handleTouchPointerMove(event, pointer);
+        return;
+      }
 
       if (!roiPointerState || roiPointerState.pointerId !== event.pointerId) {
         const hoverMode = currentStream ? getROIHitMode(pointer.x, pointer.y) : null;
@@ -423,6 +629,12 @@ export function createCameraController({
     });
 
     const endPointerInteraction = (event) => {
+      if (isTouchInteractionMode(event)) {
+        endTouchPointerInteraction(event);
+        processingCanvas.style.cursor = 'default';
+        return;
+      }
+
       if (!roiPointerState || roiPointerState.pointerId !== event.pointerId) return;
 
       if (processingCanvas.hasPointerCapture(event.pointerId)) {
@@ -456,6 +668,7 @@ export function createCameraController({
   // Draw a shaded overlay around the selected area.
   function drawOverlay() {
     const roi = computeROI();
+    const metrics = getOverlayMetrics();
 
     pctx.save();
     pctx.fillStyle = 'rgba(0,0,0,0.25)';
@@ -467,29 +680,35 @@ export function createCameraController({
 
     pctx.save();
     pctx.strokeStyle = '#ffcc00';
-    pctx.lineWidth = 2;
-    pctx.setLineDash([6, 4]);
-    pctx.strokeRect(roi.x + 1, roi.y + 1, roi.width - 2, roi.height - 2);
+    pctx.lineWidth = metrics.lineWidth;
+    pctx.setLineDash([metrics.dashLength, metrics.dashGap]);
+    pctx.strokeRect(
+      roi.x + Math.round(metrics.lineWidth / 2),
+      roi.y + Math.round(metrics.lineWidth / 2),
+      Math.max(1, roi.width - metrics.lineWidth),
+      Math.max(1, roi.height - metrics.lineWidth),
+    );
     pctx.restore();
 
     pctx.save();
     pctx.fillStyle = '#ffcc00';
-    const halfHandle = ROI_HANDLE_SIZE_PX / 2;
+    const halfHandleWidth = metrics.handleWidth / 2;
+    const halfHandleHeight = metrics.handleHeight / 2;
     const x0 = roi.x;
     const x1 = roi.x + roi.width;
     const y0 = roi.y;
     const y1 = roi.y + roi.height;
-    pctx.fillRect(x0 - halfHandle, y0 - halfHandle, ROI_HANDLE_SIZE_PX, ROI_HANDLE_SIZE_PX);
-    pctx.fillRect(x1 - halfHandle, y0 - halfHandle, ROI_HANDLE_SIZE_PX, ROI_HANDLE_SIZE_PX);
-    pctx.fillRect(x0 - halfHandle, y1 - halfHandle, ROI_HANDLE_SIZE_PX, ROI_HANDLE_SIZE_PX);
-    pctx.fillRect(x1 - halfHandle, y1 - halfHandle, ROI_HANDLE_SIZE_PX, ROI_HANDLE_SIZE_PX);
+    pctx.fillRect(x0 - halfHandleWidth, y0 - halfHandleHeight, metrics.handleWidth, metrics.handleHeight);
+    pctx.fillRect(x1 - halfHandleWidth, y0 - halfHandleHeight, metrics.handleWidth, metrics.handleHeight);
+    pctx.fillRect(x0 - halfHandleWidth, y1 - halfHandleHeight, metrics.handleWidth, metrics.handleHeight);
+    pctx.fillRect(x1 - halfHandleWidth, y1 - halfHandleHeight, metrics.handleWidth, metrics.handleHeight);
     pctx.restore();
   }
 
   // Keep the live preview and ROI overlay updating.
   function startOverlayLoop() {
     function loop() {
-      if (!currentStream) {
+      if (!currentStream || !previewActive) {
         overlayAnimationId = null;
         return;
       }
@@ -554,6 +773,8 @@ export function createCameraController({
     init,
     startCamera,
     stopCamera,
+    setPreviewActive,
+    isCameraRunning,
     getCurrentVideoTrackSettings,
     refreshPreviewLayout: syncPreviewFrameRect,
   };

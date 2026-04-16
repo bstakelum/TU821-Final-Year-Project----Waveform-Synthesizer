@@ -10,7 +10,7 @@ It was built as part of the TU821 Honours Degree in Electrical and Electronic En
 ## What the App Does
 
 - Starts the device camera in the browser.
-- Lets the user position and resize a region of interest directly on the live preview.
+- Lets the user position and resize a region of interest directly on the live preview, including pinch resize on touch devices.
 - Captures one frame and cleans the image.
 - Extracts the waveform trace from the processed image.
 - Draws the recovered waveform on screen.
@@ -115,7 +115,7 @@ The spectrum is intended as a learning aid, not a precision measurement instrume
 - `Capture Frame`: captures the current frame for processing
 - `Reset ROI`: resets the ROI to the full frame
 - `Front/Back`: switches between available cameras
-- ROI overlay: drag inside the box to move it, or drag edges and corners to resize it
+- ROI overlay: drag inside the box to move it, drag edges and corners to resize it on desktop, or use two fingers to resize it on touch devices
 - Capture status: shows whether capture succeeded or failed
 
 ### Waveform Controls
@@ -137,7 +137,7 @@ The spectrum is intended as a learning aid, not a precision measurement instrume
 
 ## Notes for Testing
 
-- A clean, high-contrast waveform image will give the best extraction result.
+- A clean, high-contrast waveform image with even lighting will give the best extraction result.
 - The ROI should be kept as tight as possible around the waveform of interest.
 - On mobile, moving slightly closer usually improves trace continuity when the waveform line is thin in the frame.
 - The test signal panel is useful for checking playback and spectrum behavior without using the camera.

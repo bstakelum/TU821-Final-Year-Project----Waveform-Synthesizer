@@ -209,6 +209,16 @@ label {
   height: auto;
 }
 
+#processedPreviewCanvas {
+  display: block;
+  height: auto;
+  image-rendering: pixelated;
+}
+
+.preview-card {
+  margin-bottom: 0.75rem;
+}
+
 #spectrumCanvas {
   height: auto;
 }
