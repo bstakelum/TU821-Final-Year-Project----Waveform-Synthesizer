@@ -5,15 +5,18 @@ export function createImageProcessor({
 } = {}) {
 
   const defaultConfig = {
-    flattenKernelRadius: 5, // How wide the local background estimate is.
+    flattenKernelRadius: 9, // Minimum width of the local background estimate.
+    flattenKernelRadiusRatio: 0.03, // Scales the background estimate to larger mobile captures.
     flattenBias: 118, // Brightness added back after flattening so the line stays visible.
+    flattenGain: 1.25, // Extra emphasis for dark line contrast after lighting removal.
     contrastLowPercentile: 2, // Dark end used when stretching contrast.
     contrastHighPercentile: 98, // Bright end used when stretching contrast.
     minIsolatedNeighborCount: 8, // Removes lone bright pixels that look like noise.
     erodeMinForegroundCount: 6, // Removes very thin bright specks.
-    hysteresisHighPercentile: 96, // Bright pixels that are definitely part of the line.
-    hysteresisLowPercentile: 70, // Dimmer pixels kept only when they touch strong pixels.
+    hysteresisHighPercentile: 94, // Bright pixels that are definitely part of the line.
+    hysteresisLowPercentile: 62, // Dimmer pixels kept only when they touch strong pixels.
     minComponentSizePixels: 50, // Small blobs below this size are discarded.
+    minComponentWidthRatio: 0.10, // Preferred width for waveform-like components, used as a soft ranking cue.
   };
 
   // Reuse working buffers so each frame does not keep allocating new arrays.
@@ -146,10 +149,17 @@ export function createImageProcessor({
     }
   }
 
+  function getEffectiveFlattenRadius(width, height) {
+    const minDimension = Math.max(1, Math.min(width, height));
+    const ratioRadius = Math.round(minDimension * defaultConfig.flattenKernelRadiusRatio);
+    return Math.max(1, Math.max(Math.floor(defaultConfig.flattenKernelRadius), ratioRadius));
+  }
+
   // Reduce uneven lighting across the image.
   function flattenIllumination(width, height, srcData, dstData) {
-    const radius = Math.max(1, Math.floor(defaultConfig.flattenKernelRadius));
+    const radius = getEffectiveFlattenRadius(width, height);
     const bias = Number.isFinite(defaultConfig.flattenBias) ? defaultConfig.flattenBias : 128;
+    const gain = Number.isFinite(defaultConfig.flattenGain) ? defaultConfig.flattenGain : 1;
     const temp = new Uint8ClampedArray(srcData.length);
 
     // Horizontal pass
@@ -168,7 +178,7 @@ export function createImageProcessor({
         const sourceValue = srcData[idx];
         const backgroundValue = Math.round(sum / count);
         const darkResponse = Math.max(0, backgroundValue - sourceValue);
-        const flattened = Math.max(0, Math.min(255, Math.round(darkResponse + bias)));
+        const flattened = Math.max(0, Math.min(255, Math.round((darkResponse * gain) + bias)));
         dstData[idx] = flattened;
         dstData[idx + 1] = flattened;
         dstData[idx + 2] = flattened;
@@ -349,11 +359,17 @@ export function createImageProcessor({
     const n = (data.length / 4);
     const label = new Int32Array(n);
     let nextLabel = 1;
+    const minWidthPixels = Math.max(8, Math.floor(width * defaultConfig.minComponentWidthRatio));
 
     // Label one connected bright region at a time.
     const floodFill = (startIdx) => {
       const stack = [startIdx];
       const component = [];
+      let minX = width;
+      let maxX = 0;
+      let minY = height;
+      let maxY = 0;
+
       while (stack.length > 0) {
         const idx = stack.pop();
         if (label[idx]) continue;
@@ -361,6 +377,10 @@ export function createImageProcessor({
         component.push(idx);
 
         const x = idx % width, y = Math.floor(idx / width);
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
         const x0 = Math.max(0, x - 1), x1 = Math.min(width - 1, x + 1);
         const y0 = Math.max(0, y - 1), y1 = Math.min(height - 1, y + 1);
 
@@ -373,7 +393,14 @@ export function createImageProcessor({
           }
         }
       }
-      return component;
+      return {
+        label: nextLabel,
+        size: component.length,
+        minX,
+        maxX,
+        minY,
+        maxY,
+      };
     };
 
     // Find all connected bright regions.
@@ -381,20 +408,43 @@ export function createImageProcessor({
     for (let i = 0; i < n; i++) {
       if (!label[i] && data[(i) * 4] === 255) {
         const component = floodFill(i);
-        if (component.length >= minSizePixels) {
-          components.push({ label: nextLabel, size: component.length, indices: component });
+        if (component.size >= minSizePixels) {
+          const widthSpan = component.maxX - component.minX + 1;
+          const heightSpan = component.maxY - component.minY + 1;
+          const waveformScore = (widthSpan * widthSpan) / Math.max(1, heightSpan);
+
+          components.push({
+            ...component,
+            widthSpan,
+            heightSpan,
+            waveformScore,
+          });
         }
         nextLabel++;
       }
     }
 
-    // Keep the largest region and clear the others.
+    // Prefer a long, thin, waveform-like component over a large blob.
     if (components.length > 0) {
-      components.sort((a, b) => b.size - a.size);
-      const largestLabel = components[0].label;
+      const rankedComponents = components.map((component) => {
+        const widthPreference = Math.min(1, component.widthSpan / Math.max(1, minWidthPixels));
+        const rankingScore = component.waveformScore * (1 + (0.2 * widthPreference));
+        return {
+          ...component,
+          rankingScore,
+        };
+      });
+
+      rankedComponents.sort((a, b) => {
+        if (b.rankingScore !== a.rankingScore) return b.rankingScore - a.rankingScore;
+        if (b.waveformScore !== a.waveformScore) return b.waveformScore - a.waveformScore;
+        if (b.widthSpan !== a.widthSpan) return b.widthSpan - a.widthSpan;
+        return b.size - a.size;
+      });
+      const selectedLabel = rankedComponents[0].label;
 
       for (let i = 0; i < n; i++) {
-        if (label[i] !== largestLabel) {
+        if (label[i] !== selectedLabel) {
           data[(i) * 4] = 0;
           data[(i) * 4 + 1] = 0;
           data[(i) * 4 + 2] = 0;

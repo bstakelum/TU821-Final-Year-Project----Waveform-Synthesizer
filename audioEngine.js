@@ -211,6 +211,48 @@ export function createSynthAudioEngine({
     }
     return minHz + (maxHz - minHz) * ratio;
   }
+
+  function getRatioForFrequency(frequencyHz, minHz, maxHz, mode) {
+    const clampedFrequencyHz = Math.max(minHz, Math.min(maxHz, frequencyHz));
+
+    if (mode === 'log') {
+      if (clampedFrequencyHz <= 0 || minHz <= 0 || maxHz <= minHz) {
+        return 0;
+      }
+
+      return Math.log(clampedFrequencyHz / minHz) / Math.log(maxHz / minHz);
+    }
+
+    if (maxHz <= minHz) {
+      return 0;
+    }
+
+    return (clampedFrequencyHz - minHz) / (maxHz - minHz);
+  }
+
+  function resamplePeriodicSignal(signal, targetLength) {
+    if (targetLength === signal.length) {
+      return Float32Array.from(signal);
+    }
+
+    const out = new Float32Array(targetLength);
+    const sourceLength = signal.length;
+
+    for (let i = 0; i < targetLength; i++) {
+      const sourceIndex = (i * sourceLength) / targetLength;
+      const leftIndex = Math.floor(sourceIndex);
+      const fraction = sourceIndex - leftIndex;
+      const wrappedLeftIndex = leftIndex % sourceLength;
+      const wrappedRightIndex = (wrappedLeftIndex + 1) % sourceLength;
+      const leftValue = signal[wrappedLeftIndex];
+      const rightValue = signal[wrappedRightIndex];
+
+      out[i] = leftValue + ((rightValue - leftValue) * fraction);
+    }
+
+    return out;
+  }
+
   function nextPowerOfTwo(value) {
     let size = 1;
     while (size < value) {
@@ -222,13 +264,16 @@ export function createSynthAudioEngine({
   // Run a simple radix-2 FFT on the waveform for the spectrum display.
   function computeFftMagnitudes(signal) {
     const fftSize = nextPowerOfTwo(signal.length);
+    const analysisSignal = fftSize === signal.length
+      ? Float32Array.from(signal)
+      : resamplePeriodicSignal(signal, fftSize);
     const real = new Float32Array(fftSize);
     const imag = new Float32Array(fftSize);
     const magnitudeCount = (fftSize >> 1) + 1;
     const magnitudes = new Float32Array(magnitudeCount);
 
-    for (let i = 0; i < signal.length; i++) {
-      real[i] = signal[i];
+    for (let i = 0; i < analysisSignal.length; i++) {
+      real[i] = analysisSignal[i];
     }
 
     for (let i = 1, j = 0; i < fftSize; i++) {
@@ -275,11 +320,12 @@ export function createSynthAudioEngine({
     }
 
     for (let i = 0; i < magnitudeCount; i++) {
-      magnitudes[i] = Math.hypot(real[i], imag[i]) / signal.length;
+      magnitudes[i] = Math.hypot(real[i], imag[i]) / analysisSignal.length;
     }
 
     return {
       fftSize,
+      analysisLength: analysisSignal.length,
       magnitudes,
     };
   }
@@ -287,47 +333,33 @@ export function createSynthAudioEngine({
   function buildSpectrumBarsFromFft(magnitudes, sampleRateHz, minHz, maxHz, bars, scale) {
     const out = new Float32Array(bars);
     const nyquistHz = 0.5 * sampleRateHz;
+    const maxRenderableHz = Math.min(maxHz, nyquistHz);
     const fftSize = (magnitudes.length - 1) * 2;
     const binWidthHz = sampleRateHz / fftSize;
 
-    for (let i = 0; i < bars; i++) {
-      const startHz = getFrequencyAtRatio(i / bars, minHz, maxHz, scale);
-      const endHz = getFrequencyAtRatio((i + 1) / bars, minHz, maxHz, scale);
-      const clampedStartHz = Math.max(0, startHz);
-      const clampedEndHz = Math.min(endHz, nyquistHz);
+    if (maxRenderableHz <= minHz) {
+      return out;
+    }
 
-      if (clampedEndHz <= clampedStartHz) {
-        out[i] = 0;
+    for (let bin = 1; bin < magnitudes.length; bin++) {
+      const frequencyHz = bin * binWidthHz;
+
+      if (frequencyHz < minHz || frequencyHz > maxRenderableHz) {
         continue;
       }
 
-      const startBin = Math.max(0, Math.ceil(clampedStartHz / binWidthHz));
-      const endBin = Math.min(magnitudes.length - 1, Math.floor(clampedEndHz / binWidthHz));
+      const ratio = getRatioForFrequency(frequencyHz, minHz, maxHz, scale);
+      const barIndex = Math.min(bars - 1, Math.max(0, Math.floor(ratio * bars)));
 
-      if (endBin < startBin) {
-        const centerHz = 0.5 * (clampedStartHz + clampedEndHz);
-        const fallbackBin = Math.min(
-          magnitudes.length - 1,
-          Math.max(0, Math.round(centerHz / binWidthHz)),
-        );
-        out[i] = magnitudes[fallbackBin];
-        continue;
+      if (magnitudes[bin] > out[barIndex]) {
+        out[barIndex] = magnitudes[bin];
       }
-
-      let maxMagnitude = 0;
-      for (let bin = startBin; bin <= endBin; bin++) {
-        if (magnitudes[bin] > maxMagnitude) {
-          maxMagnitude = magnitudes[bin];
-        }
-      }
-
-      out[i] = maxMagnitude;
     }
 
     return out;
   }
 
-  // Draw the spectrum by sampling the FFT at the middle of each display bar.
+  // Draw the spectrum by mapping FFT bins into the display bars.
   function drawSpectrumFromWaveform(waveform) {
     if (!spectrumCanvas || !spectrumCtx || !waveform || waveform.length < 4) {
       clearSpectrumCanvas();
@@ -352,14 +384,15 @@ export function createSynthAudioEngine({
     const maxDisplayHz = SPECTRUM_MAX_HZ;
 
     const virtualSampleRate = waveform.length / panelDurationSeconds;
-    const nyquistHz = 0.5 * virtualSampleRate;
 
     const bars = SPECTRUM_BAR_COUNT;
     const gap = 1;
     const fft = computeFftMagnitudes(waveform);
+    const analysisSampleRate = fft.analysisLength / panelDurationSeconds;
+    const nyquistHz = 0.5 * analysisSampleRate;
     const mags = buildSpectrumBarsFromFft(
       fft.magnitudes,
-      virtualSampleRate,
+      analysisSampleRate,
       minDisplayHz,
       maxDisplayHz,
       bars,

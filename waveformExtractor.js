@@ -3,15 +3,13 @@
 // - trims weak or noisy ends
 // - fills short gaps and centers the result for playback
 
-const DEFAULT_FOREGROUND_CUTOFF = 200;
-
 const TRIM_CONFIDENCE_CONFIG = {
   confWindowRadius: 1, // Nearby area used when judging whether a column looks reliable.
   smoothRadius: 4, // Smooths the confidence score so trimming is less jumpy.
-  highThreshold: 0.52, // Score needed to confidently enter the waveform.
-  lowThreshold: 0.34, // Score that marks the waveform as getting too weak.
+  highThreshold: 0.48, // Score needed to confidently enter the waveform.
+  lowThreshold: 0.28, // Score that marks the waveform as getting too weak.
   enterRun: 8, // How many strong columns are needed before keeping a run.
-  exitRun: 4, // How many weak columns end a run.
+  exitRun: 5, // How many weak columns end a run.
   minSpanColumnsRatio: 0.10, // Small runs below this fraction are ignored.
   minSpanColumnsFloor: 8, // Minimum run length for narrow selections.
   continuityMaxDelta: 12, // Largest jump allowed between nearby columns.
@@ -22,16 +20,16 @@ const TRIM_CONFIDENCE_CONFIG = {
 const CENTER_OF_MASS_CONFIG = {
   bandHalfWidth: 14, // Search width around the predicted line position.
   bandHalfHeight: 10, // Height used when counting bright pixels around the line.
-  minForegroundCount: 5, // Minimum bright pixels needed to accept a point.
+  minForegroundCount: 4, // Minimum bright pixels needed to accept a point.
   maxJumpPx: 12, // Largest allowed vertical jump between columns.
-  strongBandCount: 30, // Bright-pixel count that marks a column as a strong section.
+  strongBandCount: 24, // Bright-pixel count that marks a column as a strong section.
   maxJumpForStrongBandPx: 18, // Strong sections are allowed a slightly larger jump.
   medianRadius: 3, // Smooths the detected path.
   bufferCommitThreshold: 5, // Requires a short stable run before locking onto the path.
 };
 
 const WAVEFORM_POSTPROCESSING_CONFIG = {
-  interpolationMaxGap: 20, // Largest missing gap that will be filled in.
+  interpolationMaxGap: 28, // Largest missing gap that will be filled in.
 };
 
 // Main entry point: turn the processed image into a normalized waveform.
@@ -43,15 +41,11 @@ export function extractWaveformFromImageData(imageData, options = {}) {
   const { width, height } = imageData;
   if (width <= 0 || height <= 0) return null;
 
-  const foregroundCutoff = Number.isFinite(options.foregroundCutoff)
-    ? options.foregroundCutoff
-    : DEFAULT_FOREGROUND_CUTOFF;
-
   const roiBounds = normalizeROI(options.roi || null, width, height);
 
   // Find the line, then trim weak sections from the ends.
-  const rawTracePath = findCenterOfMassTracePath(imageData, foregroundCutoff, roiBounds);
-  const tracePath = trimTracePathByConfidence(rawTracePath, imageData, foregroundCutoff, roiBounds);
+  const rawTracePath = findCenterOfMassTracePath(imageData, roiBounds);
+  const tracePath = trimTracePathByConfidence(rawTracePath, imageData, roiBounds);
 
   // Keep waveform scaling tied to the full frame height.
   // The ROI limits where the trace can be found, but it should not compress the
@@ -118,8 +112,12 @@ function countValidPathPoints(pathY) {
   return count;
 }
 
+function isForegroundMaskPixel(value) {
+  return value >= 128;
+}
+
 // Measure how much of a nearby area looks like foreground.
-function getForegroundDensity(imageData, x, y, radiusX, radiusY, cutoff) {
+function getForegroundDensity(imageData, x, y, radiusX, radiusY) {
   const { width, height, data } = imageData;
   let foreground = 0;
   let total = 0;
@@ -129,7 +127,7 @@ function getForegroundDensity(imageData, x, y, radiusX, radiusY, cutoff) {
     for (let dx = -radiusX; dx <= radiusX; dx++) {
       const xx = clamp(x + dx, 0, width - 1);
       const idx = (yy * width + xx) * 4;
-      if (data[idx] >= cutoff) foreground++;
+      if (isForegroundMaskPixel(data[idx])) foreground++;
       total++;
     }
   }
@@ -137,14 +135,14 @@ function getForegroundDensity(imageData, x, y, radiusX, radiusY, cutoff) {
   return total > 0 ? foreground / total : 0;
 }
 // Count bright pixels in a vertical band around the current point.
-function countForegroundInBand(imageData, x, centerY, halfHeight, roiBounds, cutoff) {
+function countForegroundInBand(imageData, x, centerY, halfHeight, roiBounds) {
   const { width, height, data } = imageData;
   const range = getROIYRange(height, roiBounds, centerY, halfHeight);
   let count = 0;
 
   for (let y = range.yMin; y <= range.yMax; y++) {
     const idx = (y * width + x) * 4;
-    if (data[idx] >= cutoff) count++;
+    if (isForegroundMaskPixel(data[idx])) count++;
   }
 
   return count;
@@ -251,7 +249,7 @@ function getROIYRange(height, roiBounds, predictedY = null, bandHalfWidth = null
 }
 
 // Trim weak or noisy sections from the start and end of the path.
-function trimTracePathByConfidence(pathY, imageData, foregroundCutoff, roiBounds = null) {
+function trimTracePathByConfidence(pathY, imageData, roiBounds = null) {
   const { width } = imageData;
   if (!pathY || pathY.length === 0) return pathY;
 
@@ -285,8 +283,7 @@ function trimTracePathByConfidence(pathY, imageData, foregroundCutoff, roiBounds
       x,
       y,
       settings.confWindowRadius,
-      settings.confWindowRadius,
-      foregroundCutoff
+      settings.confWindowRadius
     );
 
     let continuityScore = 0.7;
@@ -374,7 +371,7 @@ function trimTracePathByConfidence(pathY, imageData, foregroundCutoff, roiBounds
 }
 
 // Follow the waveform line across the image one column at a time.
-function findCenterOfMassTracePath(imageData, foregroundCutoff, roiBounds = null) {
+function findCenterOfMassTracePath(imageData, roiBounds = null) {
   const { width, height, data } = imageData;
   const pathY = new Float32Array(width);
   for (let i = 0; i < width; i++) {
@@ -383,7 +380,6 @@ function findCenterOfMassTracePath(imageData, foregroundCutoff, roiBounds = null
 
   const settings = {
     ...CENTER_OF_MASS_CONFIG,
-    foregroundCutoff,
   };
 
   // Pre-calculate the full search range once.
@@ -398,7 +394,7 @@ function findCenterOfMassTracePath(imageData, foregroundCutoff, roiBounds = null
     for (let y = yMin; y <= yMax; y++) {
       const idx = (y * width + x) * 4;
       const brightness = data[idx];
-      if (brightness < settings.foregroundCutoff) continue;
+      if (!isForegroundMaskPixel(brightness)) continue;
 
       const weight = brightness / 255;
       weightSum += weight;
@@ -461,8 +457,7 @@ function findCenterOfMassTracePath(imageData, foregroundCutoff, roiBounds = null
       x,
       Math.round(yEstimate),
       settings.bandHalfHeight,
-      roiBounds,
-      settings.foregroundCutoff
+      roiBounds
     );
 
     const allowedJump = localBandCount >= settings.strongBandCount

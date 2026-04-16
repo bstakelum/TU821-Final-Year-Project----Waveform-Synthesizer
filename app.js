@@ -38,6 +38,10 @@ const waveformPeriodInput = document.getElementById('waveformPeriodMs');
 const waveformPeriodValue = document.getElementById('waveformPeriodValue');
 const spectrumCanvas = document.getElementById('spectrumCanvas');
 const processingCanvas = document.getElementById('processingCanvas');
+const captureStatus = document.getElementById('captureStatus');
+const mobileGenerationView = document.getElementById('mobileGenerationView');
+const mobileAnalysisView = document.getElementById('mobileAnalysisView');
+const analysisStartCameraButton = document.getElementById('analysisStartCamera');
 const video = document.getElementById('video');
 const videoWrapper = video?.closest('.video-wrapper') ?? null;
 const spectrumScaleSelect = document.getElementById('spectrumScale');
@@ -45,7 +49,6 @@ const testSignalButton = document.getElementById('testSignal');
 const testSignalTypeSelect = document.getElementById('testSignalType');
 const testSignalPeriodsInput = document.getElementById('testSignalPeriods');
 
-const waveformForegroundCutoff = 200; // Brightness level used to decide what counts as waveform.
 const DEFAULT_STARTUP_WIDTH = 640;
 const DEFAULT_STARTUP_HEIGHT = 480;
 const MOBILE_CAMERA_ASPECT_RATIO = 1;
@@ -60,10 +63,15 @@ const synthEngine = createSynthAudioEngine({
 const DEFAULT_PANEL_DURATION_SECONDS = 0.01;
 const MIN_PANEL_PERIOD_MS = 1;
 const MAX_PANEL_PERIOD_MS = 15;
+const MOBILE_VIEW_MODES = {
+  GENERATION: 'generation',
+  ANALYSIS: 'analysis',
+};
 
 // Give the canvases a sensible size before the camera reports its real size.
 initializeCanvasSizes(DEFAULT_STARTUP_WIDTH, getDefaultStartupHeight());
 applyResponsiveDeviceMode();
+setMobileView(MOBILE_VIEW_MODES.GENERATION);
 updateWaveformPeriodNote();
 
 // Create the image cleanup pipeline.
@@ -77,17 +85,8 @@ const cameraController = createCameraController({
   cameraControls: document.getElementById('cameraControls'),
   cameraToggleButton: document.getElementById('cameraToggle'),
   resetROIButton: document.getElementById('resetROI'),
+  roiElements: {},
   getTargetAspectRatio: getPreferredCameraAspectRatio,
-  roiElements: {
-    topInput: document.getElementById('roiTop'),
-    bottomInput: document.getElementById('roiBottom'),
-    leftInput: document.getElementById('roiLeft'),
-    rightInput: document.getElementById('roiRight'),
-    topVal: document.getElementById('roiTopVal'),
-    bottomVal: document.getElementById('roiBottomVal'),
-    leftVal: document.getElementById('roiLeftVal'),
-    rightVal: document.getElementById('roiRightVal'),
-  },
   onVideoSize: ({ width, height }) => {
     initializeCanvasSizes(width, height);
   },
@@ -107,6 +106,12 @@ if (spectrumScaleSelect) {
 
 if (testSignalButton) {
   testSignalButton.addEventListener('click', handleTestSignalClick);
+}
+
+if (analysisStartCameraButton) {
+  analysisStartCameraButton.addEventListener('click', async () => {
+    enterGenerationView();
+  });
 }
 
 if (waveformPeriodInput) {
@@ -160,6 +165,11 @@ function getDefaultStartupHeight() {
 function applyResponsiveDeviceMode() {
   const mode = DEVICE_MODE_MEDIA_QUERY.matches ? 'mobile' : 'desktop';
   document.documentElement.dataset.deviceMode = mode;
+  document.documentElement.dataset.mobileView = mode === 'mobile'
+    ? (document.documentElement.dataset.mobileView === MOBILE_VIEW_MODES.ANALYSIS
+      ? MOBILE_VIEW_MODES.ANALYSIS
+      : MOBILE_VIEW_MODES.GENERATION)
+    : 'desktop';
 }
 
 function bindResponsiveDeviceMode() {
@@ -262,6 +272,7 @@ function handleTestSignalClick() {
   synthEngine.updateWaveform(testWaveform);
   
   drawWaveform(testWaveform);
+  enterAnalysisView();
 }
 
 // Make a simple test waveform so the app can be checked without the camera.
@@ -328,20 +339,49 @@ function clampNumber(value, min, max, fallback) {
 function processCapturedImage(imageData, roi) {
   const processedImageData = imageProcessor.preprocessImage(imageData);
   if (!processedImageData) {
+    updateCaptureStatus('Capture failed: preprocessing did not produce an image.');
     return;
   }
 
-  const waveform = extractWaveformFromImageData(processedImageData, {
-    foregroundCutoff: waveformForegroundCutoff,
-    roi,
-  });
+  const waveform = extractWaveformFromImageData(processedImageData, { roi });
 
   if (!waveform || waveform.length === 0) {
+    updateCaptureStatus('No waveform captured. Try moving closer or adjusting the ROI.');
     return;
   }
 
   synthEngine.updateWaveform(waveform);
   drawWaveform(waveform);
+  updateCaptureStatus('Waveform captured successfully.');
+  enterAnalysisView();
+}
+
+function updateCaptureStatus(message) {
+  if (!captureStatus) return;
+  captureStatus.textContent = message;
+}
+
+function isMobileViewMode() {
+  return document.documentElement.dataset.deviceMode === 'mobile';
+}
+
+function setMobileView(mode) {
+  if (!isMobileViewMode()) return;
+  document.documentElement.dataset.mobileView = mode;
+}
+
+function enterAnalysisView() {
+  if (!isMobileViewMode()) return;
+  cameraController.stopCamera?.();
+  setMobileView(MOBILE_VIEW_MODES.ANALYSIS);
+}
+
+function enterGenerationView({ startCamera = false } = {}) {
+  if (!isMobileViewMode()) return;
+  setMobileView(MOBILE_VIEW_MODES.GENERATION);
+  if (startCamera) {
+    void cameraController.startCamera?.();
+  }
 }
 
 // Draw the waveform in the main analysis panel.
