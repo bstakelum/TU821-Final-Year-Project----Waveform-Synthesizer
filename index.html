@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <title>Hand-Drawn Waveform Synthesizer</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%230f172a'/%3E%3Cpath d='M8 35c6 0 6-18 12-18s6 30 12 30 6-30 12-30 6 18 12 18' fill='none' stroke='%23ffcc00' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="style.css" />
 </head>
 
@@ -13,6 +14,7 @@
 
   <div class="container">
 
+    <div id="mobileGenerationView" class="mobile-view-section mobile-generation-view">
     <!-- Camera controls -->
     <div class="panel">
       <h2>Controls</h2>
@@ -31,6 +33,7 @@
             <div class="camera-select-row">
               <button id="cameraToggle">Front</button>
             </div>
+            <div id="captureStatus" class="capture-status">Ready to capture.</div>
             <div class="roi-controls">
               <div class="info-row">
                 <span class="info-label">ROI</span>
@@ -39,15 +42,7 @@
                   <span class="info-box" role="tooltip">ROI means Region of Interest. It is the part of the camera image the app will use when looking for the waveform.</span>
                 </span>
               </div>
-              <!-- ROI sliders set the capture area as percentages of the frame -->
-              <div class="roi-row">
-                <label>Top <input id="roiTop" type="range" min="0" max="80" value="20"> <span id="roiTopVal">20%</span></label>
-                <label>Bottom <input id="roiBottom" type="range" min="20" max="100" value="80"> <span id="roiBottomVal">80%</span></label>
-              </div>
-              <div class="roi-row">
-                <label>Left <input id="roiLeft" type="range" min="0" max="90" value="0"> <span id="roiLeftVal">0%</span></label>
-                <label>Right <input id="roiRight" type="range" min="10" max="100" value="100"> <span id="roiRightVal">100%</span></label>
-              </div>
+              <p class="roi-hint">Drag inside the box to move it. Drag an edge or corner to resize it.</p>
             </div>
           </div>
         </div>
@@ -81,8 +76,10 @@
         </div>
       </div>
     </div>
+    </div>
 
     <!-- Analysis area -->
+    <div id="mobileAnalysisView" class="mobile-view-section mobile-analysis-view">
     <div class="right-column">
         <div class="panel">
         <h2>Analysis</h2>
@@ -97,6 +94,7 @@
               <div id="waveformPeriodNote" class="waveform-period-note">Period: 10 ms</div>
               <canvas id="waveformCanvas"></canvas>
             </div>
+            <button id="analysisStartCamera" class="mobile-analysis-return">Back to Controls</button>
             <div class="controls audio-controls">
               <div class="audio-primary-controls">
                 <button id="playSynth">Play</button>
@@ -144,6 +142,7 @@
             <canvas id="spectrumCanvas"></canvas>
           </div>
         </div>
+    </div>
     </div>
 
   </div>

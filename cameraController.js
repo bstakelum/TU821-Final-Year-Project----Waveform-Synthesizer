@@ -10,12 +10,16 @@ export function createCameraController({
   cameraControls,
   cameraToggleButton,
   resetROIButton,
+  getTargetAspectRatio,
   roiElements,
   onCapture,
   onVideoSize,
 }) {
   const ROI_MIN_GAP_RATIO = 0.01;
+  const ROI_HANDLE_HIT_PADDING_PX = 18;
+  const ROI_HANDLE_SIZE_PX = 10;
   const ROI_MIN_HEIGHT_PX = 2;
+  const ROI_MIN_WIDTH_PX = 2;
 
   const pctx = processingCanvas.getContext('2d');
   const captureCanvas = document.createElement('canvas');
@@ -25,11 +29,12 @@ export function createCameraController({
   let overlayAnimationId = null;
   let preferredFacing = 'user';
   let roiControlsBound = false;
-
+  let currentFrameRect = { x: 0, y: 0, width: 0, height: 0 };
   let roiTopPct = 0.0;
   let roiBottomPct = 1.0;
   let roiLeftPct = 0.0;
   let roiRightPct = 1.0;
+  let roiPointerState = null;
 
   const {
     topInput,
@@ -40,11 +45,12 @@ export function createCameraController({
     bottomVal,
     leftVal,
     rightVal,
-  } = roiElements;
+  } = roiElements || {};
 
   // Hook up the buttons and sliders.
   function init() {
     bindROIControls();
+    bindROIInteractionHandlers();
     updateCameraToggleUI();
 
     if (startButton) {
@@ -79,14 +85,7 @@ export function createCameraController({
     }
 
     video.addEventListener('loadedmetadata', () => {
-      processingCanvas.width = video.videoWidth;
-      processingCanvas.height = video.videoHeight;
-      captureCanvas.width = video.videoWidth;
-      captureCanvas.height = video.videoHeight;
-
-      if (typeof onVideoSize === 'function') {
-        onVideoSize({ width: video.videoWidth, height: video.videoHeight });
-      }
+      syncPreviewFrameRect();
     });
   }
 
@@ -119,12 +118,81 @@ export function createCameraController({
     pctx.clearRect(0, 0, processingCanvas.width, processingCanvas.height);
   }
 
+  function getVideoSourceSize() {
+    const sourceWidth = Math.max(0, Math.round(video.videoWidth || 0));
+    const sourceHeight = Math.max(0, Math.round(video.videoHeight || 0));
+    return { sourceWidth, sourceHeight };
+  }
+
+  function getEffectiveAspectRatio(sourceWidth, sourceHeight) {
+    const fallbackAspectRatio = sourceWidth > 0 && sourceHeight > 0
+      ? sourceWidth / sourceHeight
+      : (4 / 3);
+    const requestedAspectRatio = typeof getTargetAspectRatio === 'function'
+      ? Number(getTargetAspectRatio())
+      : NaN;
+
+    return Number.isFinite(requestedAspectRatio) && requestedAspectRatio > 0
+      ? requestedAspectRatio
+      : fallbackAspectRatio;
+  }
+
+  function getFrameRectForAspectRatio(sourceWidth, sourceHeight, targetAspectRatio) {
+    if (sourceWidth <= 0 || sourceHeight <= 0) {
+      return { x: 0, y: 0, width: 0, height: 0 };
+    }
+
+    const sourceAspectRatio = sourceWidth / sourceHeight;
+    if (!Number.isFinite(targetAspectRatio) || targetAspectRatio <= 0 || Math.abs(sourceAspectRatio - targetAspectRatio) < 0.01) {
+      return { x: 0, y: 0, width: sourceWidth, height: sourceHeight };
+    }
+
+    if (sourceAspectRatio > targetAspectRatio) {
+      const croppedWidth = Math.max(1, Math.round(sourceHeight * targetAspectRatio));
+      const offsetX = Math.max(0, Math.floor((sourceWidth - croppedWidth) / 2));
+      return { x: offsetX, y: 0, width: croppedWidth, height: sourceHeight };
+    }
+
+    const croppedHeight = Math.max(1, Math.round(sourceWidth / targetAspectRatio));
+    const offsetY = Math.max(0, Math.floor((sourceHeight - croppedHeight) / 2));
+    return { x: 0, y: offsetY, width: sourceWidth, height: croppedHeight };
+  }
+
+  function syncPreviewFrameRect() {
+    const { sourceWidth, sourceHeight } = getVideoSourceSize();
+    if (sourceWidth <= 0 || sourceHeight <= 0) {
+      return;
+    }
+
+    const targetAspectRatio = getEffectiveAspectRatio(sourceWidth, sourceHeight);
+    currentFrameRect = getFrameRectForAspectRatio(sourceWidth, sourceHeight, targetAspectRatio);
+
+    processingCanvas.width = currentFrameRect.width;
+    processingCanvas.height = currentFrameRect.height;
+    captureCanvas.width = currentFrameRect.width;
+    captureCanvas.height = currentFrameRect.height;
+
+    if (typeof onVideoSize === 'function') {
+      onVideoSize({ width: currentFrameRect.width, height: currentFrameRect.height });
+    }
+  }
+
   function captureCurrentFrameImageData() {
     if (video.readyState < 2 || captureCanvas.width === 0 || captureCanvas.height === 0) {
       return null;
     }
     // Copy the current video frame into an offscreen canvas.
-    cctx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+    cctx.drawImage(
+      video,
+      currentFrameRect.x,
+      currentFrameRect.y,
+      currentFrameRect.width,
+      currentFrameRect.height,
+      0,
+      0,
+      captureCanvas.width,
+      captureCanvas.height,
+    );
     const imageData = cctx.getImageData(0, 0, captureCanvas.width, captureCanvas.height);
     const roi = computeROI();
     return { imageData, roi };
@@ -152,6 +220,41 @@ export function createCameraController({
     if (rightInput) rightInput.value = Math.round(roiRightPct * 100);
   }
 
+  function clampROI(nextLeftPct, nextTopPct, nextRightPct, nextBottomPct) {
+    const minWidthRatio = processingCanvas.width > 0
+      ? Math.max(ROI_MIN_GAP_RATIO, ROI_MIN_WIDTH_PX / processingCanvas.width)
+      : ROI_MIN_GAP_RATIO;
+    const minHeightRatio = processingCanvas.height > 0
+      ? Math.max(ROI_MIN_GAP_RATIO, ROI_MIN_HEIGHT_PX / processingCanvas.height)
+      : ROI_MIN_GAP_RATIO;
+
+    let leftPct = Math.max(0, Math.min(nextLeftPct, 1 - minWidthRatio));
+    let topPct = Math.max(0, Math.min(nextTopPct, 1 - minHeightRatio));
+    let rightPct = Math.min(1, Math.max(nextRightPct, minWidthRatio));
+    let bottomPct = Math.min(1, Math.max(nextBottomPct, minHeightRatio));
+
+    if (rightPct - leftPct < minWidthRatio) {
+      if (leftPct !== roiLeftPct) {
+        rightPct = Math.min(1, leftPct + minWidthRatio);
+      } else {
+        leftPct = Math.max(0, rightPct - minWidthRatio);
+      }
+    }
+
+    if (bottomPct - topPct < minHeightRatio) {
+      if (topPct !== roiTopPct) {
+        bottomPct = Math.min(1, topPct + minHeightRatio);
+      } else {
+        topPct = Math.max(0, bottomPct - minHeightRatio);
+      }
+    }
+
+    roiLeftPct = leftPct;
+    roiTopPct = topPct;
+    roiRightPct = rightPct;
+    roiBottomPct = bottomPct;
+  }
+
   // Reset the ROI to the full frame.
   function resetROI() {
     roiTopPct = 0.0;
@@ -161,7 +264,7 @@ export function createCameraController({
     syncROIDisplay();
   }
 
-  // Connect the ROI sliders and stop them from crossing over.
+  // Connect ROI controls.
   function bindROIControls() {
     if (roiControlsBound) {
       syncROIDisplay();
@@ -202,6 +305,145 @@ export function createCameraController({
     syncROIDisplay();
   }
 
+  function getPointerPosition(event) {
+    const bounds = processingCanvas.getBoundingClientRect();
+    const scaleX = bounds.width > 0 ? processingCanvas.width / bounds.width : 1;
+    const scaleY = bounds.height > 0 ? processingCanvas.height / bounds.height : 1;
+
+    return {
+      x: (event.clientX - bounds.left) * scaleX,
+      y: (event.clientY - bounds.top) * scaleY,
+    };
+  }
+
+  function getROIHitMode(pointerX, pointerY) {
+    const roi = computeROI();
+    const nearLeft = Math.abs(pointerX - roi.x) <= ROI_HANDLE_HIT_PADDING_PX;
+    const nearRight = Math.abs(pointerX - (roi.x + roi.width)) <= ROI_HANDLE_HIT_PADDING_PX;
+    const nearTop = Math.abs(pointerY - roi.y) <= ROI_HANDLE_HIT_PADDING_PX;
+    const nearBottom = Math.abs(pointerY - (roi.y + roi.height)) <= ROI_HANDLE_HIT_PADDING_PX;
+    const insideX = pointerX >= roi.x && pointerX <= roi.x + roi.width;
+    const insideY = pointerY >= roi.y && pointerY <= roi.y + roi.height;
+
+    if (nearLeft && nearTop) return 'top-left';
+    if (nearRight && nearTop) return 'top-right';
+    if (nearLeft && nearBottom) return 'bottom-left';
+    if (nearRight && nearBottom) return 'bottom-right';
+    if (nearLeft && insideY) return 'left';
+    if (nearRight && insideY) return 'right';
+    if (nearTop && insideX) return 'top';
+    if (nearBottom && insideX) return 'bottom';
+    if (insideX && insideY) return 'move';
+
+    return null;
+  }
+
+  function applyROIDrag(mode, deltaXPx, deltaYPx, startROI) {
+    const width = Math.max(1, processingCanvas.width);
+    const height = Math.max(1, processingCanvas.height);
+    const deltaXPct = deltaXPx / width;
+    const deltaYPct = deltaYPx / height;
+
+    let nextLeftPct = startROI.leftPct;
+    let nextTopPct = startROI.topPct;
+    let nextRightPct = startROI.rightPct;
+    let nextBottomPct = startROI.bottomPct;
+
+    if (mode.includes('left')) nextLeftPct += deltaXPct;
+    if (mode.includes('right')) nextRightPct += deltaXPct;
+    if (mode.includes('top')) nextTopPct += deltaYPct;
+    if (mode.includes('bottom')) nextBottomPct += deltaYPct;
+
+    if (mode === 'move') {
+      const roiWidthPct = startROI.rightPct - startROI.leftPct;
+      const roiHeightPct = startROI.bottomPct - startROI.topPct;
+      nextLeftPct = Math.max(0, Math.min(startROI.leftPct + deltaXPct, 1 - roiWidthPct));
+      nextTopPct = Math.max(0, Math.min(startROI.topPct + deltaYPct, 1 - roiHeightPct));
+      nextRightPct = nextLeftPct + roiWidthPct;
+      nextBottomPct = nextTopPct + roiHeightPct;
+    }
+
+    clampROI(nextLeftPct, nextTopPct, nextRightPct, nextBottomPct);
+  }
+
+  function bindROIInteractionHandlers() {
+    if (!processingCanvas) return;
+
+    processingCanvas.addEventListener('pointerdown', (event) => {
+      if (!currentStream) return;
+
+      const pointer = getPointerPosition(event);
+      const mode = getROIHitMode(pointer.x, pointer.y);
+      if (!mode) return;
+
+      roiPointerState = {
+        pointerId: event.pointerId,
+        mode,
+        startX: pointer.x,
+        startY: pointer.y,
+        startROI: {
+          leftPct: roiLeftPct,
+          topPct: roiTopPct,
+          rightPct: roiRightPct,
+          bottomPct: roiBottomPct,
+        },
+      };
+
+      processingCanvas.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+
+    processingCanvas.addEventListener('pointermove', (event) => {
+      const pointer = getPointerPosition(event);
+
+      if (!roiPointerState || roiPointerState.pointerId !== event.pointerId) {
+        const hoverMode = currentStream ? getROIHitMode(pointer.x, pointer.y) : null;
+        processingCanvas.style.cursor = hoverMode === 'move'
+          ? 'move'
+          : hoverMode === 'left' || hoverMode === 'right'
+            ? 'ew-resize'
+            : hoverMode === 'top' || hoverMode === 'bottom'
+              ? 'ns-resize'
+              : hoverMode === 'top-left' || hoverMode === 'bottom-right'
+                ? 'nwse-resize'
+                : hoverMode === 'top-right' || hoverMode === 'bottom-left'
+                  ? 'nesw-resize'
+                  : 'default';
+        return;
+      }
+
+      applyROIDrag(
+        roiPointerState.mode,
+        pointer.x - roiPointerState.startX,
+        pointer.y - roiPointerState.startY,
+        roiPointerState.startROI,
+      );
+      syncROIDisplay();
+      event.preventDefault();
+    });
+
+    const endPointerInteraction = (event) => {
+      if (!roiPointerState || roiPointerState.pointerId !== event.pointerId) return;
+
+      if (processingCanvas.hasPointerCapture(event.pointerId)) {
+        processingCanvas.releasePointerCapture(event.pointerId);
+      }
+
+      roiPointerState = null;
+      processingCanvas.style.cursor = currentStream ? 'default' : 'default';
+    };
+
+    processingCanvas.addEventListener('pointerup', endPointerInteraction);
+    processingCanvas.addEventListener('pointercancel', endPointerInteraction);
+    processingCanvas.addEventListener('pointerleave', (event) => {
+      if (!roiPointerState) {
+        processingCanvas.style.cursor = 'default';
+      } else if (roiPointerState.pointerId === event.pointerId) {
+        endPointerInteraction(event);
+      }
+    });
+  }
+
   // Convert the ROI from percentages into pixel coordinates.
   function computeROI() {
     const x = Math.floor(processingCanvas.width * roiLeftPct);
@@ -217,8 +459,10 @@ export function createCameraController({
 
     pctx.save();
     pctx.fillStyle = 'rgba(0,0,0,0.25)';
-    pctx.fillRect(0, 0, processingCanvas.width, roi.y);
-    pctx.fillRect(0, roi.y + roi.height, processingCanvas.width, processingCanvas.height - (roi.y + roi.height));
+    pctx.beginPath();
+    pctx.rect(0, 0, processingCanvas.width, processingCanvas.height);
+    pctx.rect(roi.x, roi.y, roi.width, roi.height);
+    pctx.fill('evenodd');
     pctx.restore();
 
     pctx.save();
@@ -226,6 +470,19 @@ export function createCameraController({
     pctx.lineWidth = 2;
     pctx.setLineDash([6, 4]);
     pctx.strokeRect(roi.x + 1, roi.y + 1, roi.width - 2, roi.height - 2);
+    pctx.restore();
+
+    pctx.save();
+    pctx.fillStyle = '#ffcc00';
+    const halfHandle = ROI_HANDLE_SIZE_PX / 2;
+    const x0 = roi.x;
+    const x1 = roi.x + roi.width;
+    const y0 = roi.y;
+    const y1 = roi.y + roi.height;
+    pctx.fillRect(x0 - halfHandle, y0 - halfHandle, ROI_HANDLE_SIZE_PX, ROI_HANDLE_SIZE_PX);
+    pctx.fillRect(x1 - halfHandle, y0 - halfHandle, ROI_HANDLE_SIZE_PX, ROI_HANDLE_SIZE_PX);
+    pctx.fillRect(x0 - halfHandle, y1 - halfHandle, ROI_HANDLE_SIZE_PX, ROI_HANDLE_SIZE_PX);
+    pctx.fillRect(x1 - halfHandle, y1 - halfHandle, ROI_HANDLE_SIZE_PX, ROI_HANDLE_SIZE_PX);
     pctx.restore();
   }
 
@@ -242,7 +499,17 @@ export function createCameraController({
         return;
       }
 
-      pctx.drawImage(video, 0, 0, processingCanvas.width, processingCanvas.height);
+      pctx.drawImage(
+        video,
+        currentFrameRect.x,
+        currentFrameRect.y,
+        currentFrameRect.width,
+        currentFrameRect.height,
+        0,
+        0,
+        processingCanvas.width,
+        processingCanvas.height,
+      );
       drawOverlay();
       overlayAnimationId = requestAnimationFrame(loop);
     }
@@ -288,5 +555,6 @@ export function createCameraController({
     startCamera,
     stopCamera,
     getCurrentVideoTrackSettings,
+    refreshPreviewLayout: syncPreviewFrameRect,
   };
 }

@@ -118,6 +118,18 @@ label {
   margin-top: 0.25rem;
 }
 
+.mobile-analysis-return {
+  display: none;
+  margin-top: 0.75rem;
+}
+
+.capture-status {
+  margin-top: 0.5rem;
+  color: #94a3b8;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
 .info-row {
   display: inline-flex;
   align-items: center;
@@ -255,7 +267,7 @@ html[data-device-mode='mobile'] .controls {
   left: 0;
   width: 100%;
   height: 100%;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 /* Utility class used by JS to show/hide camera-only controls */
@@ -268,7 +280,13 @@ html[data-device-mode='mobile'] .controls {
   gap: 0.4rem;
 }
 
-.roi-controls .roi-row {
+.roi-hint {
+  color: #94a3b8;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+.roi-row {
   display: flex;
   gap: 0.6rem;
   align-items: center;
@@ -278,7 +296,7 @@ html[data-device-mode='mobile'] .controls {
   display: inline-flex;
   gap: 0.4rem;
   align-items: center;
-  color: #ddd;
+  color: #cbd5e1;
 }
 
 /* Control groups for ROI and camera actions */
@@ -407,4 +425,20 @@ button {
   .right-column {
     display: block;
   }
+}
+
+html[data-device-mode='mobile'] .mobile-view-section {
+  min-width: 0;
+}
+
+html[data-device-mode='mobile'][data-mobile-view='generation'] .mobile-analysis-view {
+  display: none;
+}
+
+html[data-device-mode='mobile'][data-mobile-view='analysis'] .mobile-generation-view {
+  display: none;
+}
+
+html[data-device-mode='mobile'] .mobile-analysis-return {
+  display: inline-flex;
 }
