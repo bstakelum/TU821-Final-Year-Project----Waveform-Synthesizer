@@ -38,7 +38,6 @@ const waveformPeriodInput = document.getElementById('waveformPeriodMs');
 const waveformPeriodValue = document.getElementById('waveformPeriodValue');
 const spectrumCanvas = document.getElementById('spectrumCanvas');
 const processingCanvas = document.getElementById('processingCanvas');
-const captureStatus = document.getElementById('captureStatus');
 const mobileGenerationView = document.getElementById('mobileGenerationView');
 const mobileAnalysisView = document.getElementById('mobileAnalysisView');
 const analysisStartCameraButton = document.getElementById('analysisStartCamera');
@@ -339,26 +338,18 @@ function clampNumber(value, min, max, fallback) {
 function processCapturedImage(imageData, roi) {
   const processedImageData = imageProcessor.preprocessImage(imageData);
   if (!processedImageData) {
-    updateCaptureStatus('Capture failed: preprocessing did not produce an image.');
     return;
   }
 
   const waveform = extractWaveformFromImageData(processedImageData, { roi });
 
   if (!waveform || waveform.length === 0) {
-    updateCaptureStatus('No waveform captured. Try moving closer or adjusting the ROI.');
     return;
   }
 
   synthEngine.updateWaveform(waveform);
   drawWaveform(waveform);
-  updateCaptureStatus('Waveform captured successfully.');
   enterAnalysisView();
-}
-
-function updateCaptureStatus(message) {
-  if (!captureStatus) return;
-  captureStatus.textContent = message;
 }
 
 function isMobileViewMode() {
