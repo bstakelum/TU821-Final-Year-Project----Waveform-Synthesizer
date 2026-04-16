@@ -5,25 +5,31 @@ export function createImageProcessor({
 } = {}) {
 
   const defaultConfig = {
+    // Illumination flattening
     flattenKernelRadius: 9, // Minimum width of the local background estimate.
     flattenKernelRadiusRatio: 0.03, // Scales the background estimate to larger mobile captures.
     flattenBias: 118, // Brightness added back after flattening so the line stays visible.
     flattenGain: 1.25, // Extra emphasis for dark line contrast after lighting removal.
-    localContrastFloor: 16, // Minimum amount a pixel must rise above its local neighborhood.
-    localThresholdRadius: 15, // Minimum width of the local threshold neighborhood.
-    localThresholdRadiusRatio: 0.06, // Scales local thresholding to larger mobile captures.
-    localThresholdBias: 8, // Extra margin above the local mean before a pixel is considered foreground.
-    localThresholdStdWeight: 0.35, // Raises the local threshold slightly in noisy regions.
+
+    // Contrast stretching
     contrastLowPercentile: 2, // Dark end used when stretching contrast.
     contrastHighPercentile: 98, // Bright end used when stretching contrast.
+
+    // Binary mask cleanup
     minIsolatedNeighborCount: 8, // Removes lone bright pixels that look like noise.
     erodeMinForegroundCount: 6, // Removes very thin bright specks.
     hysteresisHighPercentile: 94, // Bright pixels that are definitely part of the line.
     hysteresisLowPercentile: 62, // Dimmer pixels kept only when they touch strong pixels.
+
+    // Component scoring
     minComponentSizePixels: 50, // Small blobs below this size are discarded.
-    minComponentWidthRatio: 0.10, // Preferred width for waveform-like components, used as a soft ranking cue.
-    maxComponentFillRatio: 0.4, // Rejects large filled blobs that are unlikely to be a thin waveform trace.
-    maxComponentHeightRatio: 0.6, // Rejects components that cover too much of the frame height.
+    componentScoreGamma: 1.35, // Pushes weaker components down faster while leaving the best one untouched.
+    componentEdgeMarginPx: 4, // Edge band used to penalize border-hugging components.
+    componentExcursionWidthRatio: 0.12, // Expected vertical movement relative to width for a waveform-like path.
+    componentExcursionGamma: 1.6, // Makes low-excursion regions earn less reward until their bend is clearer.
+    componentWidthScoreExponent: 0.72, // Compresses width advantage so long horizontal clutter does not dominate as easily.
+    componentBorderPenaltyWeight: 1.5, // Amplifies the penalty for components that lean on the image border.
+    componentBinaryThresholdRatio: 0.72, // Keeps only components close enough to the best score after damping.
   };
 
   // Reuse working buffers so each frame does not keep allocating new arrays.
@@ -74,30 +80,51 @@ export function createImageProcessor({
     denoiseImage(width, height, bufferA, bufferB);
     flattenIllumination(width, height, bufferB, bufferA);
     enhanceContrast(bufferA, bufferB);
-    suppressShadowRegions(width, height, bufferB, bufferA);
     
     // Keep strong line pixels and nearby weaker ones.
-    applyHysteresisThreshold(bufferA, bufferB, 
+    applyHysteresisThreshold(bufferB, bufferA, 
       defaultConfig.hysteresisHighPercentile,
       defaultConfig.hysteresisLowPercentile);
     
     // Join short horizontal breaks in the line.
-    horizontalClose(width, height, bufferB, bufferA, 2);
-    
-    // Keep the largest bright shape and drop the rest.
-    filterByConnectedComponents(width, height, bufferA, 
-      defaultConfig.minComponentSizePixels);
+    horizontalClose(width, height, bufferA, bufferB, 2);
     
     // Copy back into the main working buffer.
-    bufferB.set(bufferA);
+    bufferA.set(bufferB);
     
     // Final small cleanup pass.
-    cleanupMask(width, height, bufferB);
+    cleanupMask(width, height, bufferA);
+
+    // Damp weaker components after binary cleanup so non-winning regions survive as weaker traces.
+    filterByConnectedComponents(width, height, bufferA, defaultConfig.minComponentSizePixels);
+
+    // Re-binarize after component scoring so only strong waveform-like regions remain.
+    applyBinaryMaskAfterComponents(bufferA, defaultConfig.componentBinaryThresholdRatio);
 
     // Build the processed image output.
     const result = new ImageData(width, height);
-    result.data.set(bufferB);
+    result.data.set(bufferA);
     return result;
+  }
+
+  function applyBinaryMaskAfterComponents(data, thresholdRatio) {
+    let maxValue = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i] > maxValue) maxValue = data[i];
+    }
+
+    if (maxValue <= 0) {
+      return;
+    }
+
+    const threshold = Math.max(1, Math.round(maxValue * thresholdRatio));
+    for (let i = 0; i < data.length; i += 4) {
+      const value = data[i] >= threshold ? 255 : 0;
+      data[i] = value;
+      data[i + 1] = value;
+      data[i + 2] = value;
+      data[i + 3] = 255;
+    }
   }
 
   // Look up a brightness level at a given percentile.
@@ -163,12 +190,6 @@ export function createImageProcessor({
     return Math.max(1, Math.max(Math.floor(defaultConfig.flattenKernelRadius), ratioRadius));
   }
 
-  function getEffectiveLocalThresholdRadius(width, height) {
-    const minDimension = Math.max(1, Math.min(width, height));
-    const ratioRadius = Math.round(minDimension * defaultConfig.localThresholdRadiusRatio);
-    return Math.max(1, Math.max(Math.floor(defaultConfig.localThresholdRadius), ratioRadius));
-  }
-
   // Reduce uneven lighting across the image.
   function flattenIllumination(width, height, srcData, dstData) {
     const radius = getEffectiveFlattenRadius(width, height);
@@ -217,92 +238,6 @@ export function createImageProcessor({
       dstData[i] = normalized;
       dstData[i + 1] = normalized;
       dstData[i + 2] = normalized;
-      dstData[i + 3] = 255;
-    }
-  }
-
-  // Suppress broad shadow regions by keeping only pixels that stand out from their local neighborhood.
-  function suppressShadowRegions(width, height, srcData, dstData) {
-    const radius = getEffectiveLocalThresholdRadius(width, height);
-    const thresholdBias = defaultConfig.localThresholdBias;
-    const stdWeight = defaultConfig.localThresholdStdWeight;
-    const contrastFloor = defaultConfig.localContrastFloor;
-    const localMean = new Uint8ClampedArray(srcData.length);
-    const localSquareMean = new Float32Array(width * height);
-    const temp = new Uint8ClampedArray(srcData.length);
-    const squareValues = new Float32Array(width * height);
-    const squareBlurX = new Float32Array(width * height);
-
-    horizontalBlur(width, height, srcData, temp, radius);
-
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const y0 = Math.max(0, y - radius);
-        const y1 = Math.min(height - 1, y + radius);
-        let sum = 0;
-        let count = 0;
-        for (let yy = y0; yy <= y1; yy++) {
-          sum += temp[(yy * width + x) * 4];
-          count++;
-        }
-        const idx = (y * width + x) * 4;
-        const mean = Math.round(sum / count);
-        localMean[idx] = mean;
-        localMean[idx + 1] = mean;
-        localMean[idx + 2] = mean;
-        localMean[idx + 3] = 255;
-      }
-    }
-
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const idx = y * width + x;
-        const pixelValue = srcData[idx * 4];
-        squareValues[idx] = pixelValue * pixelValue;
-      }
-    }
-
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const x0 = Math.max(0, x - radius);
-        const x1 = Math.min(width - 1, x + radius);
-        let sum = 0;
-        let count = 0;
-        for (let xx = x0; xx <= x1; xx++) {
-          sum += squareValues[y * width + xx];
-          count++;
-        }
-        squareBlurX[y * width + x] = sum / count;
-      }
-    }
-
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const y0 = Math.max(0, y - radius);
-        const y1 = Math.min(height - 1, y + radius);
-        let sum = 0;
-        let count = 0;
-        for (let yy = y0; yy <= y1; yy++) {
-          sum += squareBlurX[yy * width + x];
-          count++;
-        }
-        localSquareMean[y * width + x] = sum / count;
-      }
-    }
-
-    for (let i = 0; i < srcData.length; i += 4) {
-      const localMeanValue = localMean[i];
-      const localVariance = Math.max(0, localSquareMean[i / 4] - (localMeanValue * localMeanValue));
-      const localStdDev = Math.sqrt(localVariance);
-      const threshold = Math.min(255, localMeanValue + thresholdBias + (localStdDev * stdWeight));
-      const contrastAboveMean = srcData[i] - localMeanValue;
-      const keepValue = srcData[i] >= threshold && contrastAboveMean >= contrastFloor
-        ? srcData[i]
-        : 0;
-
-      dstData[i] = keepValue;
-      dstData[i + 1] = keepValue;
-      dstData[i + 2] = keepValue;
       dstData[i + 3] = 255;
     }
   }
@@ -454,12 +389,11 @@ export function createImageProcessor({
     }
   }
 
-  // Keep only the largest bright region.
+  // Score connected components and damp weaker ones instead of deleting them outright.
   function filterByConnectedComponents(width, height, data, minSizePixels) {
     const n = (data.length / 4);
     const label = new Int32Array(n);
     let nextLabel = 1;
-    const minWidthPixels = Math.max(8, Math.floor(width * defaultConfig.minComponentWidthRatio));
 
     // Label one connected bright region at a time.
     const floodFill = (startIdx) => {
@@ -496,6 +430,7 @@ export function createImageProcessor({
       return {
         label: nextLabel,
         size: component.length,
+        pixels: component,
         minX,
         maxX,
         minY,
@@ -511,22 +446,95 @@ export function createImageProcessor({
         if (component.size >= minSizePixels) {
           const widthSpan = component.maxX - component.minX + 1;
           const heightSpan = component.maxY - component.minY + 1;
-          const boundingArea = Math.max(1, widthSpan * heightSpan);
-          const fillRatio = component.size / boundingArea;
-          const heightRatio = heightSpan / Math.max(1, height);
+          const columnsWithPixels = new Uint16Array(widthSpan);
+          const columnMinY = new Int16Array(widthSpan);
+          const columnMaxY = new Int16Array(widthSpan);
+          const columnCenterY = new Float32Array(widthSpan);
+          columnMinY.fill(-1);
+          columnMaxY.fill(-1);
 
-          if (fillRatio > defaultConfig.maxComponentFillRatio || heightRatio > defaultConfig.maxComponentHeightRatio) {
-            nextLabel++;
-            continue;
+          for (let pixelIndex = 0; pixelIndex < component.pixels.length; pixelIndex++) {
+            const idx = component.pixels[pixelIndex];
+            const x = idx % width;
+            const y = Math.floor(idx / width);
+            const localX = x - component.minX;
+            columnsWithPixels[localX]++;
+            if (columnMinY[localX] === -1 || y < columnMinY[localX]) {
+              columnMinY[localX] = y;
+            }
+            if (columnMaxY[localX] === -1 || y > columnMaxY[localX]) {
+              columnMaxY[localX] = y;
+            }
           }
 
-          const waveformScore = (widthSpan * widthSpan) / Math.max(1, heightSpan);
+          let occupiedColumns = 0;
+          let totalColumnThickness = 0;
+          let topTouchColumns = 0;
+          let bottomTouchColumns = 0;
+          let minCenterY = height;
+          let maxCenterY = 0;
+          let continuityDeltaSum = 0;
+          let continuitySteps = 0;
+          let prevCenterY = NaN;
+          const edgeMargin = Math.max(0, defaultConfig.componentEdgeMarginPx);
+
+          for (let localX = 0; localX < widthSpan; localX++) {
+            if (columnsWithPixels[localX] <= 0) continue;
+            occupiedColumns++;
+
+            const localThickness = columnMaxY[localX] - columnMinY[localX] + 1;
+            totalColumnThickness += localThickness;
+
+            if (columnMinY[localX] <= edgeMargin) topTouchColumns++;
+            if (columnMaxY[localX] >= height - 1 - edgeMargin) bottomTouchColumns++;
+
+            const centerY = (columnMinY[localX] + columnMaxY[localX]) / 2;
+            columnCenterY[localX] = centerY;
+            if (centerY < minCenterY) minCenterY = centerY;
+            if (centerY > maxCenterY) maxCenterY = centerY;
+
+            if (Number.isFinite(prevCenterY)) {
+              continuityDeltaSum += Math.abs(centerY - prevCenterY);
+              continuitySteps++;
+            }
+            prevCenterY = centerY;
+          }
+
+          const widthCoverageRatio = occupiedColumns / Math.max(1, widthSpan);
+          const averageColumnThickness = totalColumnThickness / Math.max(1, occupiedColumns);
+          const centerlineExcursion = Math.max(0, maxCenterY - minCenterY);
+          const excursionReference = Math.max(6, widthSpan * defaultConfig.componentExcursionWidthRatio);
+          const normalizedExcursion = Math.max(0, Math.min(1, centerlineExcursion / excursionReference));
+          const excursionPreference = 0.2 + (0.8 * Math.pow(normalizedExcursion, defaultConfig.componentExcursionGamma));
+          const averageContinuityDelta = continuityDeltaSum / Math.max(1, continuitySteps);
+          const continuityPreference = 1 / (1 + (averageContinuityDelta / 8));
+          const borderTouchRatio = (topTouchColumns + bottomTouchColumns) / Math.max(1, occupiedColumns * 2);
+          const borderAvoidancePreference = 1 / (1 + (defaultConfig.componentBorderPenaltyWeight * borderTouchRatio * borderTouchRatio * 6));
+          const thinnessPreference = 1 / (1 + Math.max(0, averageColumnThickness - 6) / 6);
+          const widthCoverageBlend = 0.45 + (0.55 * widthCoverageRatio);
+          const baseWidthScore = Math.pow(Math.max(1, widthSpan), defaultConfig.componentWidthScoreExponent) * widthCoverageBlend;
+          const continuityFactor = 0.4 + (0.6 * continuityPreference);
+          const waveformScore = baseWidthScore
+            * excursionPreference
+            * continuityFactor
+            * borderAvoidancePreference
+            * thinnessPreference;
 
           components.push({
             ...component,
             widthSpan,
             heightSpan,
-            fillRatio,
+            occupiedColumns,
+            widthCoverageRatio,
+            averageColumnThickness,
+            centerlineExcursion,
+            borderTouchRatio,
+            continuityPreference,
+            baseWidthScore,
+            excursionFactor: excursionPreference,
+            continuityFactor,
+            borderFactor: borderAvoidancePreference,
+            thinnessFactor: thinnessPreference,
             waveformScore,
           });
         }
@@ -537,29 +545,32 @@ export function createImageProcessor({
     // Prefer a long, thin, waveform-like component over a large blob.
     if (components.length > 0) {
       const rankedComponents = components.map((component) => {
-        const widthPreference = Math.min(1, component.widthSpan / Math.max(1, minWidthPixels));
-        const rankingScore = component.waveformScore * (1 + (0.2 * widthPreference));
+        const rankingScore = component.waveformScore;
         return {
           ...component,
           rankingScore,
         };
       });
 
-      rankedComponents.sort((a, b) => {
-        if (b.rankingScore !== a.rankingScore) return b.rankingScore - a.rankingScore;
-        if (b.waveformScore !== a.waveformScore) return b.waveformScore - a.waveformScore;
-        if (b.widthSpan !== a.widthSpan) return b.widthSpan - a.widthSpan;
-        return b.size - a.size;
-      });
-      const selectedLabel = rankedComponents[0].label;
+      const bestRankingScore = Math.max(
+        1e-6,
+        ...rankedComponents.map((component) => component.rankingScore)
+      );
+      const componentIntensityByLabel = new Map();
+
+      for (const component of rankedComponents) {
+        const normalizedScore = component.rankingScore / bestRankingScore;
+        const dampedStrength = Math.pow(Math.max(0, Math.min(1, normalizedScore)), defaultConfig.componentScoreGamma);
+        componentIntensityByLabel.set(component.label, Math.round(255 * dampedStrength));
+      }
 
       for (let i = 0; i < n; i++) {
-        if (label[i] !== selectedLabel) {
-          data[(i) * 4] = 0;
-          data[(i) * 4 + 1] = 0;
-          data[(i) * 4 + 2] = 0;
-          data[(i) * 4 + 3] = 255;
-        }
+        const componentLabel = label[i];
+        const value = componentIntensityByLabel.get(componentLabel) ?? 0;
+        data[(i) * 4] = value;
+        data[(i) * 4 + 1] = value;
+        data[(i) * 4 + 2] = value;
+        data[(i) * 4 + 3] = 255;
       }
     }
   }

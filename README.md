@@ -3,22 +3,22 @@ Web app: https://bstakelum.github.io/Waveform-Synthesizer/
 # Waveform Synthesizer
 
 This project is a browser-based learning tool for basic signal analysis and wavetable synthesis.
-It lets a user capture a waveform from a camera image, turn that trace into audio, and view the result as a waveform and FFT spectrum.
+It lets a user capture a waveform from a camera image, turn that trace into audio, and inspect the result as both a waveform and an FFT spectrum.
 
 It was built as part of the TU821 Honours Degree in Electrical and Electronic Engineering at Technological University Dublin.
 
 ## What the App Does
 
 - Starts the device camera in the browser.
-- Lets the user position and resize a region of interest directly on the live preview, including pinch resize on touch devices.
-- Captures one frame and cleans the image.
-- Extracts the waveform trace from the processed image.
+- Lets the user position and resize a region of interest directly on the live preview.
+- Supports drag-to-move ROI control on desktop and one-finger move plus two-finger resize on touch devices.
+- Captures one frame, cleans it into a binary waveform mask, and extracts a single-cycle waveform.
 - Draws the recovered waveform on screen.
 - Plays the waveform as a looping wavetable.
 - Shows an FFT-based frequency spectrum.
-- Lets the user generate built-in test signals.
+- Lets the user generate built-in signals.
 - Lets the user export the prepared waveform as a CSV file.
-- On mobile, separates capture controls from analysis to reduce scrolling.
+- On mobile, separates capture controls from analysis to reduce scrolling while keeping the camera session available between views.
 
 ## Main Idea
 
@@ -41,11 +41,11 @@ The spectrum panel then shows the frequency content of that repeating waveform u
 7. Change the panel period to hear the pitch change.
 8. Switch the spectrum between linear and log view if needed.
 
-The test signal panel can be used instead of the camera when checking the audio and spectrum features.
+The signal generator panel can be used instead of the camera when checking the audio and spectrum features.
 
-On mobile, a successful capture or test-signal generation switches into an analysis view.
+On mobile, a successful capture or generated signal switches into an analysis view.
 That view contains the waveform, playback controls, and spectrum.
-The `Back to Controls` button returns to the camera and test-signal controls.
+The `Back to Controls` button returns to the camera and signal generator controls, and if the camera was already running its preview overlay resumes without reopening the stream.
 
 ## Project Files
 
@@ -53,8 +53,8 @@ The `Back to Controls` button returns to the camera and test-signal controls.
 - [style.css](style.css): layout and visual styling.
 - [app.js](app.js): main app flow and UI wiring.
 - [cameraController.js](cameraController.js): camera start/stop, ROI controls, and frame capture.
-- [imageProcessing.js](imageProcessing.js): image cleanup before waveform extraction.
-- [waveformExtractor.js](waveformExtractor.js): trace detection, trimming, gap filling, and centering.
+- [imageProcessing.js](imageProcessing.js): image cleanup and component scoring before waveform extraction.
+- [waveformExtractor.js](waveformExtractor.js): direct per-column waveform extraction, smoothing, gap filling, and centering.
 - [audioEngine.js](audioEngine.js): wavetable playback, CSV export, and FFT spectrum drawing.
 
 ## How the Processing Pipeline Works
@@ -72,18 +72,19 @@ This stage includes:
 
 - grayscale conversion
 - light denoising
-- adaptive uneven-lighting reduction
+- illumination flattening
 - contrast stretching
 - hysteresis thresholding
-- connected-component filtering with a waveform-shaped preference
-- small-noise removal
-- retaining the strongest waveform-like region
+- short horizontal gap closing
+- binary cleanup to remove isolated noise
+- connected-component scoring that prefers wide, thin, continuous, non-border-hugging waveform shapes
+- score damping across components followed by a final binary threshold
 
 ### 3. Waveform Extraction
 
-The extractor follows the waveform line from left to right.
-It uses a center-of-mass style estimate on the processed binary mask, trims weak edges, fills short gaps, and centers the final waveform around zero.
-The ROI limits where the trace is searched for, but final waveform scaling still uses the full captured frame width/height.
+The extractor is intentionally simple in the current implementation.
+It reads each ROI column of the processed binary image, finds the median foreground `y` position in that column, lightly smooths the resulting path with a median filter, fills short missing gaps, and centers the final waveform around zero.
+The ROI limits where the trace is searched for, but final waveform scaling still uses the full captured frame height.
 
 ### 4. Wavetable Playback
 
@@ -112,43 +113,43 @@ The spectrum is intended as a learning aid, not a precision measurement instrume
 ### Camera Controls
 
 - `Start Camera`: starts or stops the video stream
-- `Capture Frame`: captures the current frame for processing
+- `Capture Waveform`: captures the current frame for processing
 - `Reset ROI`: resets the ROI to the full frame
 - `Front/Back`: switches between available cameras
-- ROI overlay: drag inside the box to move it, drag edges and corners to resize it on desktop, or use two fingers to resize it on touch devices
-- Capture status: shows whether capture succeeded or failed
+- ROI overlay: drag inside the box to move it, drag edges and corners to resize it on desktop, or use one finger to move and two fingers to resize it on touch devices
 
 ### Waveform Controls
 
 - `Play`: starts or stops the synthesized waveform
 - `Panel Period (ms)`: changes the playback period of one waveform cycle
 - `Download Waveform (.csv)`: exports the prepared waveform data
-- `Back to Controls`: mobile-only button that returns from analysis view to the camera and test-signal controls
+- `Back to Controls`: mobile-only button that returns from analysis view to the camera and signal generator controls
 
 ### Spectrum Controls
 
 - `Scale`: switches between linear and logarithmic frequency spacing
 
-### Test Signal Controls
+### Signal Generator Controls
 
-- `Waveform`: chooses the test waveform shape
+- `Waveform`: chooses the generated waveform shape
 - `Periods`: sets how many cycles appear across the sample window
-- `Generate Test Signal`: loads the test waveform into the app
+- `Generate Signal`: loads the generated waveform into the app
 
 ## Notes for Testing
 
-- A clean, high-contrast waveform image with even lighting will give the best extraction result.
+- A clean, high-contrast waveform image will give the best extraction result.
 - The ROI should be kept as tight as possible around the waveform of interest.
 - On mobile, moving slightly closer usually improves trace continuity when the waveform line is thin in the frame.
-- The test signal panel is useful for checking playback and spectrum behavior without using the camera.
+- Keeping the waveform reasonably centered in the ROI gives the component scorer less irrelevant structure to compete with.
+- The signal generator panel is useful for checking playback and spectrum behavior without using the camera.
 - The spectrum is normalized for display, so it is best used for comparing shapes and peaks visually rather than reading absolute magnitudes.
 
 ## Tuning Areas
 
 These files contain the main tuning values if you want to adjust behavior later:
 
-- [imageProcessing.js](imageProcessing.js): lighting flattening, contrast, thresholding, and noise cleanup values
-- [waveformExtractor.js](waveformExtractor.js): path tracking, trimming, and gap filling values
+- [imageProcessing.js](imageProcessing.js): lighting flattening, thresholding, component scoring, and mask cleanup values
+- [waveformExtractor.js](waveformExtractor.js): column sampling, smoothing, and gap filling values
 - [audioEngine.js](audioEngine.js): playback period limits, spectrum bar count, and display frequency range
 
 ## Running the Project

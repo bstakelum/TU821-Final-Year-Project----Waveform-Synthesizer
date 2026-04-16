@@ -46,9 +46,9 @@
           </div>
         </div>
       </div>
-      <!-- Test signal panel for quick checks without the camera -->
+      <!-- Signal generator panel for built-in waveform creation without the camera -->
       <div id="testSignalPanel" class="debug-panel">
-        <h3>Test Signal</h3>
+        <h3>Signal Generator</h3>
         <div class="test-signal-controls">
           <div class="test-signal-field">
             <label for="testSignalType">Waveform
@@ -71,7 +71,7 @@
             <input id="testSignalPeriods" type="number" min="1" max="50" step="1" value="1" />
           </div>
 
-          <button id="testSignal">Generate Test Signal</button>
+          <button id="testSignal">Generate Signal</button>
         </div>
       </div>
     </div>
@@ -82,16 +82,6 @@
     <div class="right-column">
         <div class="panel">
         <h2>Analysis</h2>
-          <div class="waveform-card preview-card">
-            <h3>Processed Capture
-              <span class="info-inline">
-                <button class="info-trigger" type="button" aria-label="What is the processed capture preview?">?</button>
-                <span class="info-box" role="tooltip">This preview shows the cleaned black-and-white image that the waveform extractor uses after image processing.</span>
-              </span>
-            </h3>
-            <canvas id="processedPreviewCanvas"></canvas>
-          </div>
-
           <div class="waveform-card">
             <h3>Synthesized Waveform
               <span class="info-inline">
