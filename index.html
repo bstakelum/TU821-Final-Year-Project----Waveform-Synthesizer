@@ -26,6 +26,7 @@
         </div>
         <div class="controls">
           <!-- Extra camera controls only show while the camera is running -->
+          <button id="openAnalysisView" class="mobile-analysis-button" type="button">Analysis</button>
           <button id="startCamera">Start Camera</button>
           <div id="cameraControls" class="hidden">
             <button id="captureFrame">Capture Waveform</button>
@@ -75,7 +76,6 @@
         </div>
       </div>
 
-      <button id="openAnalysisView" class="mobile-analysis-button" type="button">Analysis</button>
     </div>
     </div>
 
@@ -95,10 +95,12 @@
               <div id="waveformPeriodNote" class="waveform-period-note">Period: 10 ms</div>
               <canvas id="waveformCanvas"></canvas>
             </div>
-            <button id="analysisStartCamera" class="mobile-analysis-return">Controls</button>
             <div class="controls audio-controls">
-              <div class="audio-primary-controls">
+              <div class="audio-action-row">
+                <button id="analysisStartCamera" class="mobile-analysis-return">Controls</button>
                 <button id="playSynth">Play</button>
+              </div>
+              <div class="audio-primary-controls">
                 <label for="waveformPeriodMs">Panel Period (ms)
                   <span class="info-inline">
                     <button class="info-trigger" type="button" aria-label="What is period?">?</button>

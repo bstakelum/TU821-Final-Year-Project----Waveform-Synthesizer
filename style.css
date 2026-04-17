@@ -119,8 +119,6 @@ label {
 
 .mobile-analysis-button {
   display: none;
-  margin-top: 0.75rem;
-  align-self: flex-start;
 }
 
 .info-row {
@@ -316,7 +314,18 @@ button {
 .audio-controls {
   margin-top: 0.75rem;
   align-items: flex-start;
+  flex-direction: column;
   flex-wrap: wrap;
+}
+
+.audio-action-row {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.audio-action-row .mobile-analysis-return {
+  margin-top: 0;
 }
 
 .audio-primary-controls {

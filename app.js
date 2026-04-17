@@ -40,6 +40,7 @@ const MOBILE_VIEW_MODES = {
   GENERATION: 'generation',
   ANALYSIS: 'analysis',
 };
+let lastRenderedWaveform = null;
 
 // Give the canvases a sensible size before the camera reports its real size.
 initializeCanvasSizes(DEFAULT_STARTUP_WIDTH, getDefaultStartupHeight());
@@ -131,6 +132,8 @@ function initializeCanvasSizes(width, height) {
     processingCanvas.width = safeWidth;
     processingCanvas.height = safeHeight;
   }
+
+  restoreAnalysisVisuals();
 }
 
 function getPreferredCameraAspectRatio() {
@@ -249,9 +252,7 @@ function handleTestSignalClick() {
     targetPeak: 0.9,
   });
 
-  synthEngine.updateWaveform(testWaveform);
-
-  drawWaveform(testWaveform);
+  updateAnalysisWaveform(testWaveform);
   enterAnalysisView();
 }
 
@@ -328,9 +329,28 @@ function processCapturedImage(imageData, roi) {
     return;
   }
 
-  synthEngine.updateWaveform(waveform);
-  drawWaveform(waveform);
+  updateAnalysisWaveform(waveform);
   enterAnalysisView();
+}
+
+function updateAnalysisWaveform(waveform) {
+  if (!waveform || waveform.length === 0) {
+    return;
+  }
+
+  lastRenderedWaveform = Float32Array.from(waveform);
+  synthEngine.updateWaveform(lastRenderedWaveform);
+  drawWaveform(lastRenderedWaveform);
+}
+
+function restoreAnalysisVisuals() {
+  if (lastRenderedWaveform && lastRenderedWaveform.length > 0) {
+    drawWaveform(lastRenderedWaveform);
+  }
+
+  if ((synthEngine.getPreparedWavetableLength?.() ?? 0) > 0) {
+    synthEngine.setPanelDurationSeconds?.(synthEngine.getPanelDurationSeconds?.() ?? DEFAULT_PANEL_DURATION_SECONDS);
+  }
 }
 
 function isMobileViewMode() {
