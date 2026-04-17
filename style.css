@@ -80,12 +80,6 @@ canvas {
   border: 1px solid #333;
   display: block;
 }
-video {
-  width: 100%;
-  background: black;
-  border: 1px solid #333;
-  display: block;
-}
 
 .waveform-wrapper {
   position: relative;
@@ -121,6 +115,12 @@ label {
 .mobile-analysis-return {
   display: none;
   margin-top: 0.75rem;
+}
+
+.mobile-analysis-button {
+  display: none;
+  margin-top: 0.75rem;
+  align-self: flex-start;
 }
 
 .info-row {
@@ -436,5 +436,9 @@ html[data-device-mode='mobile'][data-mobile-view='analysis'] .mobile-generation-
 }
 
 html[data-device-mode='mobile'] .mobile-analysis-return {
+  display: inline-flex;
+}
+
+html[data-device-mode='mobile'] .mobile-analysis-button {
   display: inline-flex;
 }

@@ -642,7 +642,7 @@ export function createCameraController({
       }
 
       roiPointerState = null;
-      processingCanvas.style.cursor = currentStream ? 'default' : 'default';
+      processingCanvas.style.cursor = 'default';
     };
 
     processingCanvas.addEventListener('pointerup', endPointerInteraction);

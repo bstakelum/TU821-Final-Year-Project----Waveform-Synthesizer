@@ -224,8 +224,9 @@ export function createImageProcessor({
 
   // Spread out the brightness range so the line stands out more.
   function enhanceContrast(srcData, dstData) {
-    const minValue = getGrayPercentile(srcData, defaultConfig.contrastLowPercentile);
-    const maxValue = getGrayPercentile(srcData, defaultConfig.contrastHighPercentile);
+    const histogram = buildHistogram(srcData);
+    const minValue = getPercentileFromHistogram(histogram, defaultConfig.contrastLowPercentile);
+    const maxValue = getPercentileFromHistogram(histogram, defaultConfig.contrastHighPercentile);
     const range = maxValue - minValue;
 
     if (range < 1) {

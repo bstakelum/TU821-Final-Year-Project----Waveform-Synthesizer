@@ -383,8 +383,6 @@ export function createSynthAudioEngine({
     const minDisplayHz = SPECTRUM_MIN_HZ;
     const maxDisplayHz = SPECTRUM_MAX_HZ;
 
-    const virtualSampleRate = waveform.length / panelDurationSeconds;
-
     const bars = SPECTRUM_BAR_COUNT;
     const gap = 1;
     const fft = computeFftMagnitudes(waveform);
@@ -442,7 +440,7 @@ export function createSynthAudioEngine({
       spectrumCtx.fillRect(x, y, widthPx, barHeight);
     }
 
-    // Shade frequencies that are outside the current Nyquist limit.
+    // Shade frequencies beyond Nyquist and draw the Nyquist line.
     if (nyquistHz > minDisplayHz && nyquistHz < maxDisplayHz) {
       const nyquistRatio = spectrumScale === 'log'
         ? Math.log(nyquistHz / minDisplayHz) / Math.log(maxDisplayHz / minDisplayHz)
@@ -453,14 +451,7 @@ export function createSynthAudioEngine({
       spectrumCtx.fillStyle = 'rgba(100, 116, 139, 0.16)';
       spectrumCtx.fillRect(nx, plotY, plotX + plotWidth - nx, plotHeight);
       spectrumCtx.restore();
-    }
 
-    // Draw vertical Nyquist line
-    if (nyquistHz > minDisplayHz && nyquistHz < maxDisplayHz) {
-      const nyquistRatio = spectrumScale === 'log'
-        ? Math.log(nyquistHz / minDisplayHz) / Math.log(maxDisplayHz / minDisplayHz)
-        : (nyquistHz - minDisplayHz) / (maxDisplayHz - minDisplayHz);
-      const nx = Math.round(plotX + nyquistRatio * plotWidth);
       spectrumCtx.save();
       spectrumCtx.strokeStyle = '#b3ff00';
       spectrumCtx.lineWidth = 2;

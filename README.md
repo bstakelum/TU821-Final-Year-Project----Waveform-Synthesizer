@@ -18,7 +18,7 @@ It was built as part of the TU821 Honours Degree in Electrical and Electronic En
 - Shows an FFT-based frequency spectrum.
 - Lets the user generate built-in signals.
 - Lets the user export the prepared waveform as a CSV file.
-- On mobile, separates capture controls from analysis to reduce scrolling while keeping the camera session available between views.
+- On mobile, splits the interface into two views — Controls and Analysis — to reduce scrolling.
 
 ## Main Idea
 
@@ -43,9 +43,11 @@ The spectrum panel then shows the frequency content of that repeating waveform u
 
 The signal generator panel can be used instead of the camera when checking the audio and spectrum features.
 
-On mobile, a successful capture or generated signal switches into an analysis view.
-That view contains the waveform, playback controls, and spectrum.
-The `Back to Controls` button returns to the camera and signal generator controls, and if the camera was already running its preview overlay resumes without reopening the stream.
+On mobile, the interface is split into two views.
+The Controls view contains the camera, ROI, and signal generator.
+The Analysis view contains the waveform, playback controls, and spectrum.
+Capturing a frame, generating a signal, or pressing the `Analysis` button switches to the Analysis view.
+The `Controls` button in the Analysis view returns to the Controls view, and if the camera was already running its preview overlay resumes without reopening the stream.
 
 ## Project Files
 
@@ -82,8 +84,7 @@ This stage includes:
 
 ### 3. Waveform Extraction
 
-The extractor is intentionally simple in the current implementation.
-It reads each ROI column of the processed binary image, finds the median foreground `y` position in that column, lightly smooths the resulting path with a median filter, fills short missing gaps, and centers the final waveform around zero.
+The extractor reads each ROI column of the processed binary image, finds the median foreground `y` position in that column, lightly smooths the resulting path with a median filter, fills short missing gaps, and centers the final waveform around zero.
 The ROI limits where the trace is searched for, but final waveform scaling still uses the full captured frame height.
 
 ### 4. Wavetable Playback
@@ -92,7 +93,12 @@ The final waveform is stored as a single-cycle wavetable.
 When playback starts, the waveform is looped continuously.
 The panel period control changes how long one full cycle takes, which changes the pitch.
 
-### 5. Spectrum Display
+### 5. Waveform Export
+
+The prepared waveform can be downloaded as a CSV file containing one sample per line.
+This allows external validation in tools such as MATLAB, where the waveform can be played back with `sound()`, analysed with `fft()`, or compared against a reference signal.
+
+### 6. Spectrum Display
 
 The spectrum is calculated with a custom FFT.
 When needed, the waveform is periodically resampled to a radix-2 analysis length before the FFT is run.
@@ -116,14 +122,15 @@ The spectrum is intended as a learning aid, not a precision measurement instrume
 - `Capture Waveform`: captures the current frame for processing
 - `Reset ROI`: resets the ROI to the full frame
 - `Front/Back`: switches between available cameras
-- ROI overlay: drag inside the box to move it, drag edges and corners to resize it on desktop, or use one finger to move and two fingers to resize it on touch devices
+- `Analysis` : mobile-only button that returns to the analysis view
+- 'ROI overlay' : drag inside the box to move it, drag edges and corners to resize it on desktop, or use one finger to move and two fingers to resize it on touch devices
 
 ### Waveform Controls
 
 - `Play`: starts or stops the synthesized waveform
 - `Panel Period (ms)`: changes the playback period of one waveform cycle
 - `Download Waveform (.csv)`: exports the prepared waveform data
-- `Back to Controls`: mobile-only button that returns from analysis view to the camera and signal generator controls
+- `Controls`: mobile-only button that returns to the controls view
 
 ### Spectrum Controls
 

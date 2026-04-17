@@ -1,30 +1,3 @@
-// Wire up the download button after the page is ready.
-window.addEventListener('DOMContentLoaded', () => {
-  const downloadWaveformButton = document.getElementById('downloadWaveform');
-  if (downloadWaveformButton && synthEngine) {
-    function updateDownloadButtonState() {
-      const length = synthEngine.getPreparedWavetableLength?.() ?? 0;
-      downloadWaveformButton.disabled = length === 0;
-    }
-    downloadWaveformButton.addEventListener('click', () => {
-      const length = synthEngine.getPreparedWavetableLength?.() ?? 0;
-      if (length > 0 && synthEngine.exportWaveformToCSV) {
-        synthEngine.exportWaveformToCSV(
-          synthEngine.preparedWavetable || null,
-          'waveform.csv'
-        );
-      }
-    });
-    // Keep the button state in sync whenever a new waveform is loaded.
-    const origUpdateWaveform = synthEngine.updateWaveform;
-    synthEngine.updateWaveform = function(waveform) {
-      origUpdateWaveform.call(this, waveform);
-      updateDownloadButtonState();
-    };
-    // Set the button state on first load.
-    updateDownloadButtonState();
-  }
-});
 // Main app file. It connects the camera, image cleanup, waveform extraction, drawing, and audio playback.
 import { createCameraController } from './cameraController.js';
 import { createImageProcessor } from './imageProcessing.js';
@@ -41,6 +14,7 @@ const processingCanvas = document.getElementById('processingCanvas');
 const mobileGenerationView = document.getElementById('mobileGenerationView');
 const mobileAnalysisView = document.getElementById('mobileAnalysisView');
 const analysisStartCameraButton = document.getElementById('analysisStartCamera');
+const openAnalysisViewButton = document.getElementById('openAnalysisView');
 const video = document.getElementById('video');
 const videoWrapper = video?.closest('.video-wrapper') ?? null;
 const spectrumScaleSelect = document.getElementById('spectrumScale');
@@ -111,6 +85,12 @@ if (testSignalButton) {
 if (analysisStartCameraButton) {
   analysisStartCameraButton.addEventListener('click', async () => {
     enterGenerationView();
+  });
+}
+
+if (openAnalysisViewButton) {
+  openAnalysisViewButton.addEventListener('click', () => {
+    enterAnalysisView();
   });
 }
 
@@ -417,3 +397,31 @@ function drawWaveform(waveform) {
     wctx.stroke();
   }
 }
+
+// Wire up the download button after the page is ready.
+window.addEventListener('DOMContentLoaded', () => {
+  const downloadWaveformButton = document.getElementById('downloadWaveform');
+  if (downloadWaveformButton && synthEngine) {
+    function updateDownloadButtonState() {
+      const length = synthEngine.getPreparedWavetableLength?.() ?? 0;
+      downloadWaveformButton.disabled = length === 0;
+    }
+    downloadWaveformButton.addEventListener('click', () => {
+      const length = synthEngine.getPreparedWavetableLength?.() ?? 0;
+      if (length > 0 && synthEngine.exportWaveformToCSV) {
+        synthEngine.exportWaveformToCSV(
+          synthEngine.preparedWavetable || null,
+          'waveform.csv'
+        );
+      }
+    });
+    // Keep the button state in sync whenever a new waveform is loaded.
+    const origUpdateWaveform = synthEngine.updateWaveform;
+    synthEngine.updateWaveform = function(waveform) {
+      origUpdateWaveform.call(this, waveform);
+      updateDownloadButtonState();
+    };
+    // Set the button state on first load.
+    updateDownloadButtonState();
+  }
+});
