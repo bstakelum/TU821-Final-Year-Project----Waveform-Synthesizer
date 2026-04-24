@@ -41,17 +41,6 @@ export function createCameraController({
   const roiTouchPoints = new Map();
   let roiTouchState = null;
 
-  const {
-    topInput,
-    bottomInput,
-    leftInput,
-    rightInput,
-    topVal,
-    bottomVal,
-    leftVal,
-    rightVal,
-  } = roiElements || {};
-
   // Hook up the buttons and sliders.
   function init() {
     bindROIControls();
@@ -240,17 +229,7 @@ export function createCameraController({
   }
 
   // Keep the slider values and labels in sync.
-  function syncROIDisplay() {
-    if (topVal) topVal.textContent = Math.round(roiTopPct * 100) + '%';
-    if (bottomVal) bottomVal.textContent = Math.round(roiBottomPct * 100) + '%';
-    if (leftVal) leftVal.textContent = Math.round(roiLeftPct * 100) + '%';
-    if (rightVal) rightVal.textContent = Math.round(roiRightPct * 100) + '%';
-
-    if (topInput) topInput.value = Math.round(roiTopPct * 100);
-    if (bottomInput) bottomInput.value = Math.round(roiBottomPct * 100);
-    if (leftInput) leftInput.value = Math.round(roiLeftPct * 100);
-    if (rightInput) rightInput.value = Math.round(roiRightPct * 100);
-  }
+  function syncROIDisplay() {}
 
   function clampROI(nextLeftPct, nextTopPct, nextRightPct, nextBottomPct) {
     const minWidthRatio = processingCanvas.width > 0
@@ -301,32 +280,6 @@ export function createCameraController({
     if (roiControlsBound) {
       syncROIDisplay();
       return;
-    }
-
-    if (topInput && bottomInput && leftInput && rightInput) {
-      topInput.addEventListener('input', (event) => {
-        const val = Number(event.target.value) / 100;
-        roiTopPct = Math.min(val, roiBottomPct - ROI_MIN_GAP_RATIO);
-        syncROIDisplay();
-      });
-
-      bottomInput.addEventListener('input', (event) => {
-        const val = Number(event.target.value) / 100;
-        roiBottomPct = Math.max(val, roiTopPct + ROI_MIN_GAP_RATIO);
-        syncROIDisplay();
-      });
-
-      leftInput.addEventListener('input', (event) => {
-        const val = Number(event.target.value) / 100;
-        roiLeftPct = Math.min(val, roiRightPct - ROI_MIN_GAP_RATIO);
-        syncROIDisplay();
-      });
-
-      rightInput.addEventListener('input', (event) => {
-        const val = Number(event.target.value) / 100;
-        roiRightPct = Math.max(val, roiLeftPct + ROI_MIN_GAP_RATIO);
-        syncROIDisplay();
-      });
     }
 
     if (resetROIButton) {
@@ -755,7 +708,6 @@ export function createCameraController({
     const facing = preferredFacing || 'user';
 
     const attempts = [
-      // Fallback to any resolution
       { video: { facingMode: { exact: facing } }, audio: false },
       { video: { facingMode: { ideal: facing } }, audio: false },
       { video: true, audio: false },

@@ -33,7 +33,6 @@ const synthEngine = createSynthAudioEngine({
   spectrumCanvas,
 });
 
-const DEFAULT_PANEL_DURATION_SECONDS = 0.01;
 const MIN_PANEL_PERIOD_MS = 1;
 const MAX_PANEL_PERIOD_MS = 15;
 const MOBILE_VIEW_MODES = {
@@ -59,7 +58,6 @@ const cameraController = createCameraController({
   cameraControls: document.getElementById('cameraControls'),
   cameraToggleButton: document.getElementById('cameraToggle'),
   resetROIButton: document.getElementById('resetROI'),
-  roiElements: {},
   getTargetAspectRatio: getPreferredCameraAspectRatio,
   isCoarsePointer: () => DEVICE_MODE_MEDIA_QUERY.matches,
   onVideoSize: ({ width, height }) => {
@@ -96,9 +94,7 @@ if (openAnalysisViewButton) {
 }
 
 if (waveformPeriodInput) {
-  const initialSeconds = Number.isFinite(synthEngine.getPanelDurationSeconds?.())
-    ? synthEngine.getPanelDurationSeconds()
-    : DEFAULT_PANEL_DURATION_SECONDS;
+  const initialSeconds = synthEngine.getPanelDurationSeconds();
   let initialMs = Math.round(initialSeconds * 1000 * 10) / 10;
   initialMs = Math.max(MIN_PANEL_PERIOD_MS, Math.min(MAX_PANEL_PERIOD_MS, initialMs));
   waveformPeriodInput.value = initialMs;
@@ -209,9 +205,7 @@ function initializeInfoBoxViewportBounds() {
 function updateWaveformPeriodNote() {
   if (!waveformPeriodNoteEl) return;
 
-  const currentSeconds = Number.isFinite(synthEngine.getPanelDurationSeconds?.())
-    ? synthEngine.getPanelDurationSeconds()
-    : DEFAULT_PANEL_DURATION_SECONDS;
+  const currentSeconds = synthEngine.getPanelDurationSeconds();
 
   const msText = formatMilliseconds(currentSeconds * 1000);
   waveformPeriodNoteEl.textContent = `Period: ${msText} ms`;
@@ -226,11 +220,9 @@ function applyWaveformPanelPeriodMs(periodMsValue) {
 
   let msValue = Number(periodMsValue);
   msValue = Math.max(MIN_PANEL_PERIOD_MS, Math.min(MAX_PANEL_PERIOD_MS, msValue));
-  const requestedSeconds = Number.isFinite(msValue)
-    ? (msValue / 1000)
-    : DEFAULT_PANEL_DURATION_SECONDS;
+  const requestedSeconds = msValue / 1000;
 
-  const appliedSeconds = synthEngine.setPanelDurationSeconds?.(requestedSeconds) ?? DEFAULT_PANEL_DURATION_SECONDS;
+  const appliedSeconds = synthEngine.setPanelDurationSeconds(requestedSeconds);
   waveformPeriodInput.value = formatMilliseconds(appliedSeconds * 1000);
   updateWaveformPeriodNote();
 }
@@ -275,7 +267,7 @@ function createTestWaveform(length, {
         value = Math.cos(angle);
         break;
       case 'square':
-        value = Math.sign(Math.sin(angle));
+        value = ((safeCycles * t % 1) < 0.5) ? 1 : -1;
         break;
       case 'triangle':
         value = (2 / Math.PI) * Math.asin(Math.sin(angle));
@@ -349,7 +341,7 @@ function restoreAnalysisVisuals() {
   }
 
   if ((synthEngine.getPreparedWavetableLength?.() ?? 0) > 0) {
-    synthEngine.setPanelDurationSeconds?.(synthEngine.getPanelDurationSeconds?.() ?? DEFAULT_PANEL_DURATION_SECONDS);
+    synthEngine.setPanelDurationSeconds(synthEngine.getPanelDurationSeconds());
   }
 }
 

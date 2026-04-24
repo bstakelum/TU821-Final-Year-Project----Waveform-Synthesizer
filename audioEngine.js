@@ -15,6 +15,8 @@ export function createSynthAudioEngine({
   const SPECTRUM_BAR_COUNT = 160;
   const SPECTRUM_MIN_HZ = 20;
   const SPECTRUM_MAX_HZ = 40000;
+  const HEARING_MIN_HZ = 20;
+  const HEARING_MAX_HZ = 20000;
   const DEFAULT_SPECTRUM_SCALE = 'linear';
 
   let audioContext = null;
@@ -491,14 +493,12 @@ export function createSynthAudioEngine({
 
     // Show the rough human hearing range.
     spectrumCtx.save();
-    const hearingMinHz = 20;
-    const hearingMaxHz = 20000;
     const minRatio = spectrumScale === 'log'
-      ? Math.log(hearingMinHz / minDisplayHz) / Math.log(maxDisplayHz / minDisplayHz)
-      : (hearingMinHz - minDisplayHz) / (maxDisplayHz - minDisplayHz);
+      ? Math.log(HEARING_MIN_HZ / minDisplayHz) / Math.log(maxDisplayHz / minDisplayHz)
+      : (HEARING_MIN_HZ - minDisplayHz) / (maxDisplayHz - minDisplayHz);
     const maxRatio = spectrumScale === 'log'
-      ? Math.log(hearingMaxHz / minDisplayHz) / Math.log(maxDisplayHz / minDisplayHz)
-      : (hearingMaxHz - minDisplayHz) / (maxDisplayHz - minDisplayHz);
+      ? Math.log(HEARING_MAX_HZ / minDisplayHz) / Math.log(maxDisplayHz / minDisplayHz)
+      : (HEARING_MAX_HZ - minDisplayHz) / (maxDisplayHz - minDisplayHz);
     const xMin = plotX + minRatio * plotWidth;
     const xMax = plotX + maxRatio * plotWidth;
     const y = plotY + plotHeight + 6;

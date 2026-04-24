@@ -42,7 +42,7 @@
                   <span class="info-box" role="tooltip">ROI means Region of Interest. It is the part of the camera image the app will use when looking for the waveform.</span>
                 </span>
               </div>
-              <p class="roi-hint">Drag inside the box to move it. Drag an edge or corner to resize it. On touch devices, use two fingers to resize.</p>
+              <p class="roi-hint">On desktop, grab overlay to resize ROI. On touch devices, pinch to resize ROI.<br>Grab ROI to move it across screen.</p>
             </div>
           </div>
         </div>
@@ -55,7 +55,7 @@
             <label for="testSignalType">Waveform
               <span class="info-inline">
                 <button class="info-trigger" type="button" aria-label="What is a waveform?">?</button>
-                <span class="info-box" role="tooltip">A waveform is the shape of a signal over time. Different shapes sound different and produce different spectra.</span>
+                <span class="info-box" role="tooltip">A waveform is the shape of a signal over time. Different shapes sound different and produce different frequency spectra.</span>
               </span>
             </label>
             <select id="testSignalType">
@@ -68,7 +68,7 @@
           </div>
 
           <div class="test-signal-field">
-            <label for="testSignalPeriods">Periods</label>
+            <label for="testSignalPeriods">Cycles</label>
             <input id="testSignalPeriods" type="number" min="1" max="50" step="1" value="1" />
           </div>
 
@@ -88,7 +88,7 @@
             <h3>Synthesized Waveform
               <span class="info-inline">
                 <button class="info-trigger" type="button" aria-label="What is a synthesized waveform?">?</button>
-                <span class="info-box" role="tooltip">This is the waveform the app will play as one repeating cycle. Its shape controls the sound and the spectrum.</span>
+                <span class="info-box" role="tooltip">This is the waveform the app will play as one repeating cycle. It's shape controls the playback sound and the frequency spectrum.</span>
               </span>
             </h3>
             <div class="waveform-wrapper">
@@ -101,10 +101,10 @@
                 <button id="playSynth">Play</button>
               </div>
               <div class="audio-primary-controls">
-                <label for="waveformPeriodMs">Panel Period (ms)
+                <label for="waveformPeriodMs">Waveform Period (ms)
                   <span class="info-inline">
                     <button class="info-trigger" type="button" aria-label="What is period?">?</button>
-                    <span class="info-box" role="tooltip">The period is the time taken for one full cycle. A shorter period means a higher pitch.</span>
+                    <span class="info-box" role="tooltip">The period of a waveform is the time taken to complete one full cycle.</span>
                   </span>
                 </label>
                 <input id="waveformPeriodMs" type="range" min="1" max="15" step="1" value="10" />
@@ -120,7 +120,7 @@
               <h3 class="spectrum-title">Frequency Spectrum</h3>
               <span class="info-inline">
                 <button class="info-trigger" type="button" aria-label="What is a spectrum?">?</button>
-                <span class="info-box" role="tooltip"> A frequency spectrum is a graphical representation of a waveform/signal that plots frequency content against amplitude.</span>
+                <span class="info-box" role="tooltip"> A frequency spectrum shows the magnitude of each frequency component present in a signal. Peaks indicate the dominant frequencies produced by the waveform shape.</span>
               </span>
               <div class="spectrum-controls">
                 <label for="spectrumScale">Scale</label>
@@ -135,11 +135,11 @@
               </span>
               <span class="info-inline">
                 <button class="info-trigger" type="button" aria-label="What is an FFT?">FFT</button>
-                <span class="info-box" role="tooltip">FFT stands for Fast Fourier Transform. It is a fast way to calculate the frequency content of sampled data.</span>
+                <span class="info-box" role="tooltip">FFT stands for Fast Fourier Transform. It is a fast way to calculate the frequency content of a sampled signal.</span>
               </span>
               <span class="info-inline">
                 <button class="info-trigger" type="button" aria-label="What is the Nyquist limit?">Nyquist</button>
-                <span class="info-box" role="tooltip">The Nyquist limit is the highest frequency a sampled waveform can represent without aliasing.</span>
+                <span class="info-box" role="tooltip">The Nyquist limit defines the maximum frequency that can be accurately represented in a sampled signal. It is equal to half the sampling rate.</span>
               </span>
             </div>
             <canvas id="spectrumCanvas"></canvas>

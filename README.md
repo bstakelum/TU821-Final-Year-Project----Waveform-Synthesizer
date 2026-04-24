@@ -38,7 +38,7 @@ The spectrum panel then shows the frequency content of that repeating waveform u
 4. Let the app clean the image and extract the waveform.
 5. View the recovered waveform in the analysis panel.
 6. Play the synthesized sound.
-7. Change the panel period to hear the pitch change.
+7. Change the waveform period to hear the pitch change.
 8. Switch the spectrum between linear and log view if needed.
 
 The signal generator panel can be used instead of the camera when checking the audio and spectrum features.
@@ -91,7 +91,7 @@ The ROI limits where the trace is searched for, but final waveform scaling still
 
 The final waveform is stored as a single-cycle wavetable.
 When playback starts, the waveform is looped continuously.
-The panel period control changes how long one full cycle takes, which changes the pitch.
+The waveform period control changes how long one full cycle takes, which changes the pitch.
 
 ### 5. Waveform Export
 
