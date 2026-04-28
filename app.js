@@ -95,8 +95,7 @@ if (openAnalysisViewButton) {
 
 if (waveformPeriodInput) {
   const initialSeconds = synthEngine.getPanelDurationSeconds();
-  let initialMs = Math.round(initialSeconds * 1000 * 10) / 10;
-  initialMs = Math.max(MIN_PANEL_PERIOD_MS, Math.min(MAX_PANEL_PERIOD_MS, initialMs));
+  let initialMs = Math.max(MIN_PANEL_PERIOD_MS, Math.min(MAX_PANEL_PERIOD_MS, secondsToMs(initialSeconds)));
   waveformPeriodInput.value = initialMs;
   if (waveformPeriodValue) waveformPeriodValue.textContent = initialMs;
 
@@ -206,37 +205,38 @@ function updateWaveformPeriodNote() {
   if (!waveformPeriodNoteEl) return;
 
   const currentSeconds = synthEngine.getPanelDurationSeconds();
-
-  const msText = formatMilliseconds(currentSeconds * 1000);
-  waveformPeriodNoteEl.textContent = `Period: ${msText} ms`;
+  const msValue = secondsToMs(currentSeconds);
+  waveformPeriodNoteEl.textContent = `Period: ${msValue} ms`;
   if (waveformPeriodInput && waveformPeriodValue) {
-    waveformPeriodInput.value = msText;
-    waveformPeriodValue.textContent = msText;
+    waveformPeriodInput.value = msValue;
+    waveformPeriodValue.textContent = msValue;
   }
 }
 
 function applyWaveformPanelPeriodMs(periodMsValue) {
   if (!waveformPeriodInput) return;
 
-  let msValue = Number(periodMsValue);
-  msValue = Math.max(MIN_PANEL_PERIOD_MS, Math.min(MAX_PANEL_PERIOD_MS, msValue));
-  const requestedSeconds = msValue / 1000;
-
+  let msValue = Math.max(MIN_PANEL_PERIOD_MS, Math.min(MAX_PANEL_PERIOD_MS, Number(periodMsValue)));
+  const requestedSeconds = msToSeconds(msValue);
   const appliedSeconds = synthEngine.setPanelDurationSeconds(requestedSeconds);
-  waveformPeriodInput.value = formatMilliseconds(appliedSeconds * 1000);
+  waveformPeriodInput.value = secondsToMs(appliedSeconds);
   updateWaveformPeriodNote();
 }
 
-function formatMilliseconds(ms) {
-  const rounded = Math.round(ms * 10) / 10;
-  return Number.isInteger(rounded) ? `${rounded}` : `${rounded.toFixed(1)}`;
+
+function secondsToMs(seconds) {
+  return Math.round(seconds * 1000);
+}
+
+function msToSeconds(ms) {
+  return Math.round(Number(ms)) / 1000;
 }
 
 function handleTestSignalClick() {
   const sampleCount = Math.max(512, waveformCanvas.width || 1024);
 
   const waveformType = testSignalTypeSelect?.value || 'sine';
-  const baseCycles = clampNumber(testSignalPeriodsInput?.value, 0.5, 64, 1);
+  const baseCycles = clampNumber(testSignalPeriodsInput?.value, 1, 20, 1);
 
   const testWaveform = createTestWaveform(sampleCount, {
     baseCycles,
@@ -263,9 +263,6 @@ function createTestWaveform(length, {
     let value = 0;
 
     switch (waveformType) {
-      case 'cosine':
-        value = Math.cos(angle);
-        break;
       case 'square':
         value = ((safeCycles * t % 1) < 0.5) ? 1 : -1;
         break;
@@ -310,12 +307,12 @@ function clampNumber(value, min, max, fallback) {
 
 // Turn one captured frame into a waveform and update the app.
 function processCapturedImage(imageData, roi) {
-  const processedImageData = imageProcessor.preprocessImage(imageData);
+  const processedImageData = imageProcessor.preprocessImage(imageData, roi);
   if (!processedImageData) {
     return;
   }
 
-  const waveform = extractWaveformFromImageData(processedImageData, { roi });
+  const waveform = extractWaveformFromImageData(processedImageData);
 
   if (!waveform || waveform.length === 0) {
     return;
@@ -437,3 +434,13 @@ window.addEventListener('DOMContentLoaded', () => {
     updateDownloadButtonState();
   }
 });
+
+// Debugging function: Plot an ImageData buffer into the Synthesized Waveform panel. Call after updateAnalysisWaveform() to 
+// see the effect of the image processing steps (e.g. from imageProcessor.preprocessImage) on the extracted waveform.
+function plotImageDataToWaveformPanel(imageData) {
+  if (!imageData || !waveformCanvas) return;
+  waveformCanvas.width = imageData.width;
+  waveformCanvas.height = imageData.height;
+  const ctx = waveformCanvas.getContext('2d');
+  ctx.putImageData(imageData, 0, 0);
+}

@@ -9,27 +9,20 @@ export function createImageProcessor({
     flattenKernelRadius: 9, // Minimum width of the local background estimate.
     flattenKernelRadiusRatio: 0.03, // Scales the background estimate to larger mobile captures.
     flattenBias: 118, // Brightness added back after flattening so the line stays visible.
-    flattenGain: 1.25, // Extra emphasis for dark line contrast after lighting removal.
+    flattenGain: 1.5, // Extra emphasis for dark line contrast after lighting removal.
 
     // Contrast stretching
     contrastLowPercentile: 2, // Dark end used when stretching contrast.
     contrastHighPercentile: 98, // Bright end used when stretching contrast.
 
-    // Binary mask cleanup
-    minIsolatedNeighborCount: 8, // Removes lone bright pixels that look like noise.
-    erodeMinForegroundCount: 6, // Removes very thin bright specks.
-    hysteresisHighPercentile: 94, // Bright pixels that are definitely part of the line.
-    hysteresisLowPercentile: 62, // Dimmer pixels kept only when they touch strong pixels.
-
     // Component scoring
     minComponentSizePixels: 50, // Small blobs below this size are discarded.
     componentScoreGamma: 1.35, // Pushes weaker components down faster while leaving the best one untouched.
     componentEdgeMarginPx: 4, // Edge band used to penalize border-hugging components.
-    componentExcursionWidthRatio: 0.12, // Expected vertical movement relative to width for a waveform-like path.
+    componentExcursionWidthRatio: 0.2, // Expected vertical movement relative to width for a waveform-like path.
     componentExcursionGamma: 1.6, // Makes low-excursion regions earn less reward until their bend is clearer.
     componentWidthScoreExponent: 0.72, // Compresses width advantage so long horizontal clutter does not dominate as easily.
     componentBorderPenaltyWeight: 1.5, // Amplifies the penalty for components that lean on the image border.
-    componentBinaryThresholdRatio: 0.72, // Keeps only components close enough to the best score after damping.
   };
 
   // Reuse working buffers so each frame does not keep allocating new arrays.
@@ -45,7 +38,80 @@ export function createImageProcessor({
     }
   }
 
-  // Count how often each gray value appears.
+  // Run the full cleanup pipeline.
+  function preprocessImage(imageData, roi) {
+    if (!imageData) return null;
+
+    const originalWidth = imageData.width;
+    const originalHeight = imageData.height;
+    imageData = cropImageDataToROI(imageData, roi);
+
+    const { data, width, height } = imageData;
+    const pixelCount = data.length;
+    initBuffers(width, height, pixelCount);
+
+    // Move through the cleanup steps ubsing the same two buffers.
+    rgbaToGrayscale(data, bufferB);
+    denoiseImage(width, height, bufferB, bufferA);
+    flattenIllumination(width, height, bufferA, bufferB);
+    enhanceContrast(bufferB, bufferA);
+
+    // Join short horizontal breaks in the line.
+    horizontalClose(width, height, bufferA, bufferB, 2);
+
+    // Damp weaker components after binary cleanup so non-winning regions survive as weaker traces.
+    filterByConnectedComponents(width, height, bufferB, defaultConfig.minComponentSizePixels);
+
+    // Re-binarize after component scoring so only strong waveform-like regions remain.
+    applyBinaryMask(bufferB);
+
+    // Build the processed image output.
+    const result = restoreImageDataToFullSize(bufferB, originalWidth, originalHeight, roi);
+
+    return result;
+  }
+
+  // Crop the input ImageData to the given ROI, returning a new ImageData object with the cropped content.
+  function cropImageDataToROI(imageData, roi) {
+    const { x, y, width, height } = roi;
+    const src = imageData.data;
+    const cropped = new Uint8ClampedArray(width * height * 4);
+
+    for (let row = 0; row < height; row++) {
+      const srcStart = ((row + y) * imageData.width + x) * 4;
+      const destStart = row * width * 4;
+      cropped.set(src.subarray(srcStart, srcStart + width * 4), destStart);
+    }
+
+    return new ImageData(cropped, width, height);
+  }
+
+  // Restore processed (cropped) data array to original ImageData dimensions
+  function restoreImageDataToFullSize(data, originalImageWidth, originalImageHeight, roi) {
+    const { x, y, width: roiWidth, height: roiHeight } = roi;
+    const result = new ImageData(originalImageWidth, originalImageHeight);
+    // Fill with black
+    for (let i = 0; i < result.data.length; i += 4) {
+      result.data[i] = 0;
+      result.data[i + 1] = 0;
+      result.data[i + 2] = 0;
+      result.data[i + 3] = 255;
+    }
+    // Paste processed ROI data
+    for (let row = 0; row < roiHeight; row++) {
+      for (let col = 0; col < roiWidth; col++) {
+        const dstIdx = ((y + row) * originalImageWidth + (x + col)) * 4;
+        const srcIdx = (row * roiWidth + col) * 4;
+        result.data[dstIdx] = data[srcIdx];
+        result.data[dstIdx + 1] = data[srcIdx + 1];
+        result.data[dstIdx + 2] = data[srcIdx + 2];
+        result.data[dstIdx + 3] = data[srcIdx + 3];
+      }
+    }
+    return result;
+  }
+
+    // Count how often each gray value appears.
   function buildHistogram(data) {
     const hist = new Uint32Array(256);
     for (let i = 0; i < data.length; i += 4) {
@@ -67,59 +133,10 @@ export function createImageProcessor({
     return 255;
   }
 
-  // Run the full cleanup pipeline.
-  function preprocessImage(imageData) {
-    if (!imageData) return null;
-
-    const { width, height, data } = imageData;
-    const pixelCount = data.length;
-    initBuffers(width, height, pixelCount);
-
-    // Move through the cleanup steps using the same two buffers.
-    rgbaToGrayscale(data, bufferA);
-    denoiseImage(width, height, bufferA, bufferB);
-    flattenIllumination(width, height, bufferB, bufferA);
-    enhanceContrast(bufferA, bufferB);
-    
-    // Keep strong line pixels and nearby weaker ones.
-    applyHysteresisThreshold(bufferB, bufferA, 
-      defaultConfig.hysteresisHighPercentile,
-      defaultConfig.hysteresisLowPercentile);
-    
-    // Join short horizontal breaks in the line.
-    horizontalClose(width, height, bufferA, bufferB, 2);
-    
-    // Copy back into the main working buffer.
-    bufferA.set(bufferB);
-    
-    // Final small cleanup pass.
-    cleanupMask(width, height, bufferA);
-
-    // Damp weaker components after binary cleanup so non-winning regions survive as weaker traces.
-    filterByConnectedComponents(width, height, bufferA, defaultConfig.minComponentSizePixels);
-
-    // Re-binarize after component scoring so only strong waveform-like regions remain.
-    applyBinaryMaskAfterComponents(bufferA, defaultConfig.componentBinaryThresholdRatio);
-
-    // Build the processed image output.
-    const result = new ImageData(width, height);
-    result.data.set(bufferA);
-    return result;
-  }
-
-  function applyBinaryMaskAfterComponents(data, thresholdRatio) {
-    let maxValue = 0;
+  // Check if a pixel in the mask is considered foreground (part of the line).
+  function applyBinaryMask(data) {
     for (let i = 0; i < data.length; i += 4) {
-      if (data[i] > maxValue) maxValue = data[i];
-    }
-
-    if (maxValue <= 0) {
-      return;
-    }
-
-    const threshold = Math.max(1, Math.round(maxValue * thresholdRatio));
-    for (let i = 0; i < data.length; i += 4) {
-      const value = data[i] >= threshold ? 255 : 0;
+      const value = data[i] === 255 ? 255 : 0;
       data[i] = value;
       data[i + 1] = value;
       data[i + 2] = value;
@@ -184,6 +201,7 @@ export function createImageProcessor({
     }
   }
 
+  // Choose a kernel radius for the lighting flattening step based on the image size, with some minimum and scaling.
   function getEffectiveFlattenRadius(width, height) {
     const minDimension = Math.max(1, Math.min(width, height));
     const ratioRadius = Math.round(minDimension * defaultConfig.flattenKernelRadiusRatio);
@@ -239,117 +257,6 @@ export function createImageProcessor({
       dstData[i] = normalized;
       dstData[i + 1] = normalized;
       dstData[i + 2] = normalized;
-      dstData[i + 3] = 255;
-    }
-  }
-
-  // Remove tiny artifacts and reconnect small breaks.
-  function cleanupMask(width, height, data) {
-    // Shrink bright regions slightly to remove thin noise.
-    const erode3x3 = (source, target) => {
-      for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-          let cnt = 0;
-          const x0 = Math.max(0, x - 1), x1 = Math.min(width - 1, x + 1);
-          const y0 = Math.max(0, y - 1), y1 = Math.min(height - 1, y + 1);
-          for (let yy = y0; yy <= y1; yy++) {
-            for (let xx = x0; xx <= x1; xx++) {
-              if (source[(yy * width + xx) * 4] === 255) cnt++;
-            }
-          }
-          const idx = (y * width + x) * 4, val = cnt >= defaultConfig.erodeMinForegroundCount ? 255 : 0;
-          target[idx] = target[idx + 1] = target[idx + 2] = val;
-          target[idx + 3] = 255;
-        }
-      }
-    };
-
-    // Grow bright regions to reconnect small gaps.
-    const dilate3x3 = (source, target) => {
-      for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-          let fg = false;
-          const x0 = Math.max(0, x - 1), x1 = Math.min(width - 1, x + 1);
-          const y0 = Math.max(0, y - 1), y1 = Math.min(height - 1, y + 1);
-          for (let yy = y0; yy <= y1 && !fg; yy++) {
-            for (let xx = x0; xx <= x1; xx++) {
-              if (source[(yy * width + xx) * 4] === 255) { fg = true; break; }
-            }
-          }
-          const idx = (y * width + x) * 4, val = fg ? 255 : 0;
-          target[idx] = target[idx + 1] = target[idx + 2] = val;
-          target[idx + 3] = 255;
-        }
-      }
-    };
-
-    // Remove isolated bright dots.
-    const suppressIsolatedPixels = (source, target, minNeighborCount) => {
-      for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-          const idx = (y * width + x) * 4;
-          if (source[idx] !== 255) {
-            target[idx] = target[idx + 1] = target[idx + 2] = 0;
-            target[idx + 3] = 255;
-            continue;
-          }
-          let cnt = 0;
-          const x0 = Math.max(0, x - 1), x1 = Math.min(width - 1, x + 1);
-          const y0 = Math.max(0, y - 1), y1 = Math.min(height - 1, y + 1);
-          for (let yy = y0; yy <= y1; yy++) {
-            for (let xx = x0; xx <= x1; xx++) {
-              if ((xx !== x || yy !== y) && source[(yy * width + xx) * 4] === 255) cnt++;
-            }
-          }
-          const val = cnt >= minNeighborCount ? 255 : 0;
-          target[idx] = target[idx + 1] = target[idx + 2] = val;
-          target[idx + 3] = 255;
-        }
-      }
-    };
-
-    const stageB = new Uint8ClampedArray(data.length);
-    const stageC = new Uint8ClampedArray(data.length);
-    suppressIsolatedPixels(data, stageB, defaultConfig.minIsolatedNeighborCount);
-    dilate3x3(stageB, stageC);
-    erode3x3(stageC, data);
-  }
-
-  // Keep clearly bright pixels, and also keep dimmer pixels that touch them.
-  function applyHysteresisThreshold(srcData, dstData, highPercentile, lowPercentile) {
-    const highThresh = getGrayPercentile(srcData, highPercentile);
-    const lowThresh = getGrayPercentile(srcData, lowPercentile);
-
-    // First pass: mark clearly bright pixels.
-    const isHigh = new Uint8Array((srcData.length / 4) * 1);
-    for (let i = 0; i < srcData.length; i += 4) {
-      const idx = i / 4;
-      isHigh[idx] = srcData[i] >= highThresh ? 1 : 0;
-    }
-
-    // Second pass: keep strong pixels and nearby weaker pixels.
-    for (let i = 0; i < srcData.length; i += 4) {
-      const idx = i / 4;
-      let keep = isHigh[idx];
-
-      if (!keep && srcData[i] >= lowThresh) {
-        // Check nearby pixels for a strong neighbor.
-        const width = lastWidth, height = lastHeight;
-        const x = idx % width, y = Math.floor(idx / width);
-        const x0 = Math.max(0, x - 1), x1 = Math.min(width - 1, x + 1);
-        const y0 = Math.max(0, y - 1), y1 = Math.min(height - 1, y + 1);
-
-        for (let yy = y0; yy <= y1 && !keep; yy++) {
-          for (let xx = x0; xx <= x1; xx++) {
-            if (isHigh[(yy * width + xx)]) { keep = 1; break; }
-          }
-        }
-      }
-
-      const val = keep ? 255 : 0;
-      dstData[i] = val;
-      dstData[i + 1] = val;
-      dstData[i + 2] = val;
       dstData[i + 3] = 255;
     }
   }
@@ -501,41 +408,28 @@ export function createImageProcessor({
             prevCenterY = centerY;
           }
 
-          const widthCoverageRatio = occupiedColumns / Math.max(1, widthSpan);
-          const averageColumnThickness = totalColumnThickness / Math.max(1, occupiedColumns);
+          // Remove widthCoverageRatio, thinnessPreference, and continuityPreference from scoring
           const centerlineExcursion = Math.max(0, maxCenterY - minCenterY);
           const excursionReference = Math.max(6, widthSpan * defaultConfig.componentExcursionWidthRatio);
           const normalizedExcursion = Math.max(0, Math.min(1, centerlineExcursion / excursionReference));
           const excursionPreference = 0.2 + (0.8 * Math.pow(normalizedExcursion, defaultConfig.componentExcursionGamma));
-          const averageContinuityDelta = continuityDeltaSum / Math.max(1, continuitySteps);
-          const continuityPreference = 1 / (1 + (averageContinuityDelta / 8));
           const borderTouchRatio = (topTouchColumns + bottomTouchColumns) / Math.max(1, occupiedColumns * 2);
           const borderAvoidancePreference = 1 / (1 + (defaultConfig.componentBorderPenaltyWeight * borderTouchRatio * borderTouchRatio * 6));
-          const thinnessPreference = 1 / (1 + Math.max(0, averageColumnThickness - 6) / 6);
-          const widthCoverageBlend = 0.45 + (0.55 * widthCoverageRatio);
-          const baseWidthScore = Math.pow(Math.max(1, widthSpan), defaultConfig.componentWidthScoreExponent) * widthCoverageBlend;
-          const continuityFactor = 0.4 + (0.6 * continuityPreference);
+          const baseWidthScore = Math.pow(Math.max(1, widthSpan), defaultConfig.componentWidthScoreExponent);
           const waveformScore = baseWidthScore
             * excursionPreference
-            * continuityFactor
-            * borderAvoidancePreference
-            * thinnessPreference;
+            * borderAvoidancePreference;
 
           components.push({
             ...component,
             widthSpan,
             heightSpan,
             occupiedColumns,
-            widthCoverageRatio,
-            averageColumnThickness,
             centerlineExcursion,
             borderTouchRatio,
-            continuityPreference,
             baseWidthScore,
             excursionFactor: excursionPreference,
-            continuityFactor,
             borderFactor: borderAvoidancePreference,
-            thinnessFactor: thinnessPreference,
             waveformScore,
           });
         }

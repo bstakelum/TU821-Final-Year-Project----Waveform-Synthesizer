@@ -30,7 +30,7 @@ export function createCameraController({
   let currentStream = null;
   let overlayAnimationId = null;
   let previewActive = true;
-  let preferredFacing = 'user';
+  let preferredFacing = 'environment'; // Start with the back camera if available.
   let roiControlsBound = false;
   let currentFrameRect = { x: 0, y: 0, width: 0, height: 0 };
   let roiTopPct = 0.0;
@@ -416,13 +416,17 @@ export function createCameraController({
     const [[firstId, firstPoint], [secondId, secondPoint]] = points;
     const centerX = (firstPoint.x + secondPoint.x) / 2;
     const centerY = (firstPoint.y + secondPoint.y) / 2;
-    const startDistance = Math.hypot(secondPoint.x - firstPoint.x, secondPoint.y - firstPoint.y);
+    const startDX = secondPoint.x - firstPoint.x;
+    const startDY = secondPoint.y - firstPoint.y;
+    const startDistance = Math.hypot(startDX, startDY);
 
     roiTouchState = {
       type: 'pinch',
       pointerIds: [firstId, secondId],
       startCenterX: centerX,
       startCenterY: centerY,
+      startDX,
+      startDY,
       startDistance: Math.max(1, startDistance),
       startROI: snapshotROI(),
     };
@@ -434,16 +438,43 @@ export function createCameraController({
     const [firstPoint, secondPoint] = currentPoints;
     const centerX = (firstPoint.x + secondPoint.x) / 2;
     const centerY = (firstPoint.y + secondPoint.y) / 2;
-    const currentDistance = Math.max(1, Math.hypot(secondPoint.x - firstPoint.x, secondPoint.y - firstPoint.y));
-    const scale = currentDistance / Math.max(1, touchState.startDistance);
     const width = Math.max(1, processingCanvas.width);
     const height = Math.max(1, processingCanvas.height);
     const deltaCenterXPct = (centerX - touchState.startCenterX) / width;
     const deltaCenterYPct = (centerY - touchState.startCenterY) / height;
     const startWidthPct = touchState.startROI.rightPct - touchState.startROI.leftPct;
     const startHeightPct = touchState.startROI.bottomPct - touchState.startROI.topPct;
-    const nextWidthPct = startWidthPct * scale;
-    const nextHeightPct = startHeightPct * scale;
+
+    // Improved: Only resize in dominant direction, ignore small shifts
+    const startDX = touchState.startDX || (secondPoint.x - firstPoint.x);
+    const startDY = touchState.startDY || (secondPoint.y - firstPoint.y);
+    const currentDX = secondPoint.x - firstPoint.x;
+    const currentDY = secondPoint.y - firstPoint.y;
+    const minDelta = 8; // px, ignore tiny shifts
+
+    let scaleX = 1, scaleY = 1;
+    const absStartDX = Math.abs(startDX);
+    const absStartDY = Math.abs(startDY);
+    const absDeltaX = Math.abs(currentDX - startDX);
+    const absDeltaY = Math.abs(currentDY - startDY);
+
+    // Only resize if movement is significant
+    if (absDeltaX > minDelta || absDeltaY > minDelta) {
+      if (absDeltaX > absDeltaY * 1.5 && absStartDX > 0) {
+        // Horizontal dominant
+        scaleX = Math.abs(currentDX) / absStartDX;
+      } else if (absDeltaY > absDeltaX * 1.5 && absStartDY > 0) {
+        // Vertical dominant
+        scaleY = Math.abs(currentDY) / absStartDY;
+      } else {
+        // Diagonal or both
+        if (absStartDX > 0) scaleX = Math.abs(currentDX) / absStartDX;
+        if (absStartDY > 0) scaleY = Math.abs(currentDY) / absStartDY;
+      }
+    }
+
+    const nextWidthPct = startWidthPct * scaleX;
+    const nextHeightPct = startHeightPct * scaleY;
     const centerXPct = ((touchState.startROI.leftPct + touchState.startROI.rightPct) / 2) + deltaCenterXPct;
     const centerYPct = ((touchState.startROI.topPct + touchState.startROI.bottomPct) / 2) + deltaCenterYPct;
 
@@ -700,7 +731,7 @@ export function createCameraController({
   // Show which camera side will be used next.
   function updateCameraToggleUI() {
     if (!cameraToggleButton) return;
-    cameraToggleButton.textContent = preferredFacing === 'user' ? 'Front' : 'Back';
+    cameraToggleButton.textContent = preferredFacing === 'user' ? 'Back Camera' : 'Front Camera';
   }
 
   // Try the chosen camera first, then fall back to any camera.

@@ -10,8 +10,8 @@ export function createSynthAudioEngine({
   const DEFAULT_PANEL_DURATION_SECONDS = 0.01;
   const MIN_PANEL_DURATION_SECONDS = 0.001; // 1 ms
   const MAX_PANEL_DURATION_SECONDS = 0.015; // 15 ms
-  const ATTACK_SECONDS = 0.01;
-  const RELEASE_SECONDS = 0.01;
+  const ATTACK_SECONDS = 0.02;
+  const RELEASE_SECONDS = 0.05;
   const SPECTRUM_BAR_COUNT = 160;
   const SPECTRUM_MIN_HZ = 20;
   const SPECTRUM_MAX_HZ = 40000;
@@ -574,7 +574,7 @@ export function createSynthAudioEngine({
     const now = audioContext.currentTime;
     masterGainNode.gain.cancelScheduledValues(now);
     masterGainNode.gain.setValueAtTime(0, now);
-    masterGainNode.gain.linearRampToValueAtTime(0.9, now + ATTACK_SECONDS);
+    masterGainNode.gain.exponentialRampToValueAtTime(0.9, now + ATTACK_SECONDS);
 
     source.start(now);
     source.onended = () => {
@@ -597,8 +597,8 @@ export function createSynthAudioEngine({
 
     masterGainNode.gain.cancelScheduledValues(now);
     masterGainNode.gain.setValueAtTime(masterGainNode.gain.value, now);
-    masterGainNode.gain.linearRampToValueAtTime(0, now + RELEASE_SECONDS);
+    masterGainNode.gain.exponentialRampToValueAtTime(0.00001, now + RELEASE_SECONDS);
 
-    source.stop(now + RELEASE_SECONDS + 0.005);
+    source.stop(now);
   }
 }

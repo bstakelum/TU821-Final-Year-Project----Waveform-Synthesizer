@@ -1,3 +1,61 @@
+/* Custom button color classes */
+
+.btn-default {
+  background-color: #fff;
+  color: #222;
+  border: none;
+  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  font-size: 1rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-yellow {
+  background-color: #ffe066;
+  color: #222;
+  border: none;
+  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  font-size: 1rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.btn-yellow:hover {
+  background-color: #fff3b0;
+}
+
+.btn-red {
+  background-color: #ff5c5c;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  font-size: 1rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.btn-red:hover {
+  background-color: #ff8787;
+}
+
+.btn-blue {
+  background-color: #4da3ff;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  font-size: 1rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.btn-blue:hover {
+  background-color: #8cc8ff;
+}
 /* Global reset for predictable spacing and sizing */
 * {
   box-sizing: border-box;
@@ -115,10 +173,34 @@ label {
 .mobile-analysis-return {
   display: none;
   margin-top: 0.75rem;
+  background-color: #ff5c5c;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  font-size: 1rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.mobile-analysis-return:hover {
+  background-color: #ff8787;
 }
 
 .mobile-analysis-button {
   display: none;
+  background-color: #4da3ff;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  font-size: 1rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.mobile-analysis-button:hover {
+  background-color: #8cc8ff;
 }
 
 .info-row {

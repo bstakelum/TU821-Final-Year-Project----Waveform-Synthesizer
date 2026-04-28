@@ -1,20 +1,15 @@
 // Waveform extractor:
 // - assumes image processing has already isolated a mostly clean trace
 // - reads one waveform position per column
-// - fills short gaps and centers the result for playback
+// - smooths and centers the result for playback
 
 const TRACE_EXTRACTION_CONFIG = {
   minForegroundCount: 2, // Require at least a small vertical stroke before accepting a column.
   medianRadius: 2, // Light smoothing to reduce stair-stepping without reshaping the waveform.
 };
 
-const WAVEFORM_POSTPROCESSING_CONFIG = {
-  // Gap filling
-  interpolationMaxGap: 28, // Largest missing gap that will be filled in.
-};
-
 // Main entry point: turn the processed image into a normalized waveform.
-export function extractWaveformFromImageData(imageData, options = {}) {
+export function extractWaveformFromImageData(imageData) {
   if (!imageData || !Number.isFinite(imageData.width) || !Number.isFinite(imageData.height)) {
     return null;
   }
@@ -22,31 +17,21 @@ export function extractWaveformFromImageData(imageData, options = {}) {
   const { width, height } = imageData;
   if (width <= 0 || height <= 0) return null;
 
-  const roiBounds = normalizeROI(options.roi || null, width, height);
-
   // With a clean processed mask, a direct per-column trace is enough.
-  const tracePath = findColumnMedianTracePath(imageData, roiBounds);
+  const tracePath = findColumnMedianTracePath(imageData);
 
   // Keep waveform scaling tied to the full frame height.
-  // The ROI limits where the trace can be found, but it should not compress the
-  // waveform into a smaller vertical range and then stretch it back out later.
   const normYMin = 0;
   const normYMax = height - 1;
   const normYSpan = Math.max(1, normYMax - normYMin);
 
   const waveform = new Float32Array(width);
   for (let x = 0; x < width; x++) {
-    if (!isXInROI(x, roiBounds)) {
-      waveform[x] = NaN;
-      continue;
-    }
-
     const yPos = tracePath[x];
     waveform[x] = yPos >= 0 ? 1 - ((yPos - normYMin) / normYSpan) * 2 : NaN;
   }
 
-  // Fill short gaps and center the waveform around zero.
-  interpolateWaveform(waveform);
+  // Center the waveform around zero.
   zeroAndCenterWaveform(waveform);
 
   return waveform;
@@ -116,36 +101,9 @@ function medianFilterFinite1D(values, radius, workBuffer) {
   return output;
 }
 
-// Make sure the ROI fits inside the image.
-function normalizeROI(roi, width, height) {
-  if (!roi) return null;
-
-  const x = clamp(Math.floor(roi.x ?? 0), 0, width - 1);
-  const y = clamp(Math.floor(roi.y ?? 0), 0, height - 1);
-  const maxWidth = width - x;
-  const maxHeight = height - y;
-  const roiWidth = clamp(Math.floor(roi.width ?? width), 1, maxWidth);
-  const roiHeight = clamp(Math.floor(roi.height ?? height), 1, maxHeight);
-
-  return {
-    x,
-    y,
-    width: roiWidth,
-    height: roiHeight,
-    xMin: x,
-    xMax: x + roiWidth - 1,
-    yMin: y,
-    yMax: y + roiHeight - 1,
-  };
-}
-
-// Check whether a column lies inside the ROI.
-function isXInROI(x, roiBounds) {
-  return !roiBounds || (x >= roiBounds.xMin && x <= roiBounds.xMax);
-}
 
 // Read the waveform position directly from each column of the cleaned mask.
-function findColumnMedianTracePath(imageData, roiBounds = null) {
+function findColumnMedianTracePath(imageData) {
   const { width, height, data } = imageData;
   const pathY = new Float32Array(width);
   for (let i = 0; i < width; i++) {
@@ -157,31 +115,28 @@ function findColumnMedianTracePath(imageData, roiBounds = null) {
   };
   const workBuffer = new Float32Array(2 * settings.medianRadius + 2);
 
-  const getColumnMedianY = (x, yMin, yMax) => {
+  // For each column, scan the full height
+  const getColumnMedianY = (x) => {
     let foregroundCount = 0;
-
-    for (let y = yMin; y <= yMax; y++) {
+    for (let y = 0; y < height; y++) {
       const idx = (y * width + x) * 4;
       if (!isForegroundMaskPixel(data[idx])) continue;
       foregroundCount++;
     }
-
     if (foregroundCount < settings.minForegroundCount) {
       return NaN;
     }
-
     const medianOffset = Math.floor((foregroundCount - 1) / 2);
     let seen = 0;
-    for (let y = yMin; y <= yMax; y++) {
+    for (let y = 0; y < height; y++) {
       const idx = (y * width + x) * 4;
       if (!isForegroundMaskPixel(data[idx])) continue;
       if (seen === medianOffset) {
         if (foregroundCount % 2 === 1) {
           return y;
         }
-
         let nextY = y;
-        for (let yy = y + 1; yy <= yMax; yy++) {
+        for (let yy = y + 1; yy < height; yy++) {
           const nextIdx = (yy * width + x) * 4;
           if (isForegroundMaskPixel(data[nextIdx])) {
             nextY = yy;
@@ -192,65 +147,26 @@ function findColumnMedianTracePath(imageData, roiBounds = null) {
       }
       seen++;
     }
-
     return NaN;
   };
   for (let x = 0; x < width; x++) {
-    if (!isXInROI(x, roiBounds)) {
-      continue;
-    }
-
-    const yMin = roiBounds ? roiBounds.yMin : 0;
-    const yMax = roiBounds ? roiBounds.yMax : height - 1;
-    const yEstimate = getColumnMedianY(x, yMin, yMax);
-
+    const yEstimate = getColumnMedianY(x);
     if (!Number.isFinite(yEstimate)) {
       continue;
     }
-
     const quantizedY = Math.round(yEstimate);
     pathY[x] = quantizedY;
   }
-
   // Smooth the path and round it to pixel positions.
   const smoothed = medianFilterFinite1D(pathY, settings.medianRadius, workBuffer);
   const quantized = new Int16Array(width);
   for (let i = 0; i < width; i++) {
     quantized[i] = Number.isFinite(smoothed[i]) ? Math.round(smoothed[i]) : -1;
   }
-
   return quantized;
 }
 
-// Fill short missing gaps between nearby points.
-function interpolateWaveform(waveform) {
-  const { interpolationMaxGap: maxGap } = WAVEFORM_POSTPROCESSING_CONFIG;
-  let i = 0;
 
-  while (i < waveform.length) {
-    if (!Number.isNaN(waveform[i])) {
-      i++;
-      continue;
-    }
-
-    const start = i - 1;
-
-    while (i < waveform.length && Number.isNaN(waveform[i])) {
-      i++;
-    }
-
-    const end = i;
-    const gap = end - start - 1;
-
-    if (start >= 0 && end < waveform.length && gap <= maxGap) {
-      const startValue = waveform[start];
-      const endValue = waveform[end];
-      for (let j = 1; j <= gap; j++) {
-        waveform[start + j] = startValue + (endValue - startValue) * (j / (gap + 1));
-      }
-    }
-  }
-}
 // Get the median while ignoring missing values.
 function getMedianOfFiniteArray(values) {
   const finiteValues = [];

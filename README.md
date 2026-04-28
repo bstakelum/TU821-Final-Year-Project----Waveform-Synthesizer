@@ -18,7 +18,7 @@ It was built as part of the TU821 Honours Degree in Electrical and Electronic En
 - Shows an FFT-based frequency spectrum.
 - Lets the user generate built-in signals.
 - Lets the user export the prepared waveform as a CSV file.
-- On mobile, splits the interface into two views — Controls and Analysis — to reduce scrolling.
+- On mobile, splits the interface into two views — Camera Mode and Analysis Mode — to reduce scrolling.
 
 ## Main Idea
 
@@ -35,19 +35,19 @@ The spectrum panel then shows the frequency content of that repeating waveform u
 1. Start the camera.
 2. Drag and resize the ROI so it covers the waveform you want to capture.
 3. Capture a frame.
-4. Let the app clean the image and extract the waveform.
-5. View the recovered waveform in the analysis panel.
-6. Play the synthesized sound.
-7. Change the waveform period to hear the pitch change.
-8. Switch the spectrum between linear and log view if needed.
+4. View the recovered waveform in the analysis panel.
+5. Play the synthesized sound.
+6. Change the waveform period to hear the pitch change.
+7. Inspect frequency content in the spectrum. Switch between linear and log view if needed.
+8. Download waveform to .CSV file if external testing is required.
 
 The signal generator panel can be used instead of the camera when checking the audio and spectrum features.
 
-On mobile, the interface is split into two views.
-The Controls view contains the camera, ROI, and signal generator.
-The Analysis view contains the waveform, playback controls, and spectrum.
-Capturing a frame, generating a signal, or pressing the `Analysis` button switches to the Analysis view.
-The `Controls` button in the Analysis view returns to the Controls view, and if the camera was already running its preview overlay resumes without reopening the stream.
+On mobile, the interface is split into two modes.
+The Camera Mode contains the camera and signal generator.
+The Analysis mode contains the waveform, playback controls, and spectrum.
+Capturing a frame, generating a signal, or pressing the `Analysis Mode` button switches to the Analysis view.
+The `Camera Mode` button in the Analysis view returns to the Camera view, and if the camera was already running its preview overlay resumes without reopening the stream.
 
 ## Project Files
 
@@ -56,7 +56,7 @@ The `Controls` button in the Analysis view returns to the Controls view, and if 
 - [app.js](app.js): main app flow and UI wiring.
 - [cameraController.js](cameraController.js): camera start/stop, ROI controls, and frame capture.
 - [imageProcessing.js](imageProcessing.js): image cleanup and component scoring before waveform extraction.
-- [waveformExtractor.js](waveformExtractor.js): direct per-column waveform extraction, smoothing, gap filling, and centering.
+- [waveformExtractor.js](waveformExtractor.js): direct per-column waveform extraction, smoothing and centering.
 - [audioEngine.js](audioEngine.js): wavetable playback, CSV export, and FFT spectrum drawing.
 
 ## How the Processing Pipeline Works
@@ -64,8 +64,7 @@ The `Controls` button in the Analysis view returns to the Controls view, and if 
 ### 1. Camera Capture
 
 The app captures a single video frame from the selected camera.
-The ROI overlay is used to limit the part of the image that matters.
-The preview is cropped to the chosen display aspect ratio before capture so the ROI matches what the user sees on screen.
+The ROI overlay is used to limit the part of the image that the user wants to use.
 
 ### 2. Image Cleanup
 
@@ -76,16 +75,15 @@ This stage includes:
 - light denoising
 - illumination flattening
 - contrast stretching
-- hysteresis thresholding
 - short horizontal gap closing
-- binary cleanup to remove isolated noise
 - connected-component scoring that prefers wide, thin, continuous, non-border-hugging waveform shapes
-- score damping across components followed by a final binary threshold
+- binary mask
+
+The ROI limits restricts what parts of the image are exposed to the image processing pipeline.
 
 ### 3. Waveform Extraction
 
-The extractor reads each ROI column of the processed binary image, finds the median foreground `y` position in that column, lightly smooths the resulting path with a median filter, fills short missing gaps, and centers the final waveform around zero.
-The ROI limits where the trace is searched for, but final waveform scaling still uses the full captured frame height.
+The extractor reads each ROI column of the processed binary image, finds the median foreground `y` position in that column, lightly smooths the resulting path with a median filter and centers the final waveform around zero.
 
 ### 4. Wavetable Playback
 
@@ -100,19 +98,10 @@ This allows external validation in tools such as MATLAB, where the waveform can 
 
 ### 6. Spectrum Display
 
-The spectrum is calculated with a custom FFT.
-When needed, the waveform is periodically resampled to a radix-2 analysis length before the FFT is run.
+The spectrum is calculated with a custom radix-2 FFT implementation.
+When needed, the waveform is resampled to a radix-2 length before the FFT is run.
 The display then maps FFT bins into the visible bars using either linear or logarithmic frequency spacing.
-The Nyquist line is shown as a guide to the highest frequency a sampled waveform can represent without aliasing.
-
-This was chosen because:
-
-- it keeps the implementation simple
-- it matches the waveform shown on screen
-- it works even when audio is not currently playing
-- it is easier to explain as an educational tool
-
-The spectrum is intended as a learning aid, not a precision measurement instrument. 
+The Nyquist line is shown as a guide to the highest frequency a sampled signal can represent accurately.
 
 ## Controls
 
@@ -122,15 +111,15 @@ The spectrum is intended as a learning aid, not a precision measurement instrume
 - `Capture Waveform`: captures the current frame for processing
 - `Reset ROI`: resets the ROI to the full frame
 - `Front/Back`: switches between available cameras
-- `Analysis` : mobile-only button that returns to the analysis view
-- 'ROI overlay' : drag inside the box to move it, drag edges and corners to resize it on desktop, or use one finger to move and two fingers to resize it on touch devices
+- `Analysis Mode` : mobile-only button that returns to the analysis view
+- `ROI Overlay` : On desktop, grab overlay to resize and move ROI. On touch devices, pinch to resize ROI and drag to move box.
 
 ### Waveform Controls
 
 - `Play`: starts or stops the synthesized waveform
-- `Panel Period (ms)`: changes the playback period of one waveform cycle
+- `Waveform Period (ms)`: changes the playback period of one waveform cycle
 - `Download Waveform (.csv)`: exports the prepared waveform data
-- `Controls`: mobile-only button that returns to the controls view
+- `Camera Mode`: mobile-only button that returns to the camera view
 
 ### Spectrum Controls
 
@@ -139,15 +128,14 @@ The spectrum is intended as a learning aid, not a precision measurement instrume
 ### Signal Generator Controls
 
 - `Waveform`: chooses the generated waveform shape
-- `Periods`: sets how many cycles appear across the sample window
+- `Cycles`: sets how many cycles appear across the sample window
 - `Generate Signal`: loads the generated waveform into the app
 
 ## Notes for Testing
 
-- A clean, high-contrast waveform image will give the best extraction result.
+- A clean, high-contrast waveform image that fills the camera frame will give the best extraction result.
 - The ROI should be kept as tight as possible around the waveform of interest.
-- On mobile, moving slightly closer usually improves trace continuity when the waveform line is thin in the frame.
-- Keeping the waveform reasonably centered in the ROI gives the component scorer less irrelevant structure to compete with.
+- Using ROI and moving slightly closer usually improves trace continuity when the waveform line is thin in the frame.
 - The signal generator panel is useful for checking playback and spectrum behavior without using the camera.
 - The spectrum is normalized for display, so it is best used for comparing shapes and peaks visually rather than reading absolute magnitudes.
 
@@ -155,8 +143,8 @@ The spectrum is intended as a learning aid, not a precision measurement instrume
 
 These files contain the main tuning values if you want to adjust behavior later:
 
-- [imageProcessing.js](imageProcessing.js): lighting flattening, thresholding, component scoring, and mask cleanup values
-- [waveformExtractor.js](waveformExtractor.js): column sampling, smoothing, and gap filling values
+- [imageProcessing.js](imageProcessing.js): lighting flattening, contrast and component scoring
+- [waveformExtractor.js](waveformExtractor.js): column sampling and smoothing
 - [audioEngine.js](audioEngine.js): playback period limits, spectrum bar count, and display frequency range
 
 ## Running the Project
