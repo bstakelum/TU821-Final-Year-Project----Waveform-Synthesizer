@@ -11,12 +11,14 @@ const waveformPeriodInput = document.getElementById('waveformPeriodMs');
 const waveformPeriodValue = document.getElementById('waveformPeriodValue');
 const spectrumCanvas = document.getElementById('spectrumCanvas');
 const processingCanvas = document.getElementById('processingCanvas');
+
 const mobileGenerationView = document.getElementById('mobileGenerationView');
 const mobileAnalysisView = document.getElementById('mobileAnalysisView');
 const analysisStartCameraButton = document.getElementById('analysisStartCamera');
 const openAnalysisViewButton = document.getElementById('openAnalysisView');
 const video = document.getElementById('video');
 const videoWrapper = video?.closest('.video-wrapper') ?? null;
+
 const spectrumScaleSelect = document.getElementById('spectrumScale');
 const testSignalButton = document.getElementById('testSignal');
 const testSignalTypeSelect = document.getElementById('testSignalType');
@@ -307,18 +309,57 @@ function clampNumber(value, min, max, fallback) {
 
 // Turn one captured frame into a waveform and update the app.
 function processCapturedImage(imageData, roi) {
+  const _t0 = performance.now();
+  const _heapBefore = performance.memory
+    ? parseFloat((performance.memory.usedJSHeapSize / 1048576).toFixed(2)) : null;
+
+  const _t1 = performance.now();
   const processedImageData = imageProcessor.preprocessImage(imageData, roi);
+  const _imageProcMs = parseFloat((performance.now() - _t1).toFixed(2));
+
   if (!processedImageData) {
+    utOnCaptureAttempt(null, { imageProc_ms: _imageProcMs });
     return;
   }
 
+  const _t2 = performance.now();
   const waveform = extractWaveformFromImageData(processedImageData);
+  const _extractMs = parseFloat((performance.now() - _t2).toFixed(2));
 
   if (!waveform || waveform.length === 0) {
+    utOnCaptureAttempt(waveform, { imageProc_ms: _imageProcMs, waveformExtract_ms: _extractMs });
     return;
   }
 
-  updateAnalysisWaveform(waveform);
+  lastRenderedWaveform = waveform;
+
+  const _t3 = performance.now();
+  synthEngine.updateWaveform(lastRenderedWaveform);
+  const _synthUpdateMs = parseFloat((performance.now() - _t3).toFixed(2));
+
+  const _t4 = performance.now();
+  drawWaveform(lastRenderedWaveform);
+  const _waveformDrawMs = parseFloat((performance.now() - _t4).toFixed(2));
+
+  const _heapAfter = performance.memory
+    ? parseFloat((performance.memory.usedJSHeapSize / 1048576).toFixed(2)) : null;
+  const _pipelineMs = parseFloat((performance.now() - _t0).toFixed(2));
+
+  const _ap = synthEngine.getLastPerfMs();
+  const perf = {
+    pipeline_ms:        _pipelineMs,
+    imageProc_ms:       _imageProcMs,
+    waveformExtract_ms: _extractMs,
+    synthUpdate_ms:     _synthUpdateMs,
+    waveformDraw_ms:    _waveformDrawMs,
+    fft_ms:             _ap.fftMs,
+    spectrumDraw_ms:    _ap.spectrumDrawMs,
+    wavetablePrep_ms:   _ap.wavetablePrepMs,
+    heapUsedMB_before:  _heapBefore,
+    heapUsedMB_after:   _heapAfter,
+  };
+
+  utOnCaptureAttempt(waveform, perf);
   enterAnalysisView();
 }
 
@@ -327,7 +368,9 @@ function updateAnalysisWaveform(waveform) {
     return;
   }
 
-  lastRenderedWaveform = Float32Array.from(waveform);
+  // Both extractWaveformFromImageData and createTestWaveform return freshly
+  // allocated Float32Arrays — storing the reference directly is safe.
+  lastRenderedWaveform = waveform;
   synthEngine.updateWaveform(lastRenderedWaveform);
   drawWaveform(lastRenderedWaveform);
 }
@@ -374,6 +417,31 @@ function drawWaveform(waveform) {
 
   const plotWidth = Math.max(10, waveformCanvas.width);
   const plotHeight = Math.max(20, waveformCanvas.height);
+
+  // Draw 0 reference line only.
+  wctx.save();
+  wctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  wctx.lineWidth = 1;
+  wctx.setLineDash([4, 4]);
+  const zeroY = plotHeight / 2;
+  wctx.beginPath();
+  wctx.moveTo(0, zeroY);
+  wctx.lineTo(plotWidth, zeroY);
+  wctx.stroke();
+  wctx.restore();
+
+  // Draw tick labels: +1 near top, 0 at midpoint, -1 near bottom.
+  wctx.save();
+  wctx.fillStyle = 'rgba(255,255,255,0.5)';
+  wctx.font = '11px monospace';
+  wctx.textAlign = 'left';
+  for (const level of [1, 0, -1]) {
+    const yRaw = ((1 - (level + 1) / 2)) * plotHeight;
+    const label = String(level);
+    const yLabel = level === 1 ? yRaw + 12 : yRaw - 3;
+    wctx.fillText(label, 4, yLabel);
+  }
+  wctx.restore();
 
   wctx.strokeStyle = '#ffffff';
   wctx.lineWidth = 2;
@@ -435,12 +503,187 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 });
 
-// Debugging function: Plot an ImageData buffer into the Synthesized Waveform panel. Call after updateAnalysisWaveform() to 
-// see the effect of the image processing steps (e.g. from imageProcessor.preprocessImage) on the extracted waveform.
-function plotImageDataToWaveformPanel(imageData) {
-  if (!imageData || !waveformCanvas) return;
-  waveformCanvas.width = imageData.width;
-  waveformCanvas.height = imageData.height;
-  const ctx = waveformCanvas.getContext('2d');
-  ctx.putImageData(imageData, 0, 0);
+// USER TESTING TRACKER
+// Silently collects session metrics for remote user testing.
+// Remove this section after FYP submission.
+
+const userTestData = {
+  sessionStart: new Date().toISOString(),
+  device: DEVICE_MODE_MEDIA_QUERY.matches ? 'mobile' : 'desktop',
+  browser: navigator.userAgent,
+  timeToFirstSuccessfulExtractionMs: null,
+  captureAttempts: 0,
+  playPresses: 0,
+  periodAdjustments: 0,
+  testSignalUses: [],
+  roiAdjustments: 0,
+  roiResets: 0,
+  spectrumScaleSwitches: 0,
+  infoLabelInteractions: {},
+  captures: [],
+};
+
+const _sessionStartTime = performance.now();
+
+// Record a per-capture entry.
+function utRecordCapture(wasNull, userRating, perf) {
+  userTestData.captures.push({
+    index: userTestData.captureAttempts,
+    timestamp: new Date().toISOString(),
+    perf: perf ?? null,
+    wasNull,
+    userRating: userRating ?? null,
+  });
+}
+
+// Show the single-question rating bar below the waveform after a successful capture.
+function utShowCaptureRatingPrompt(perf) {
+  const bar = document.getElementById('utRatingBar');
+  if (!bar) {
+    utRecordCapture(false, null, perf);
+    return;
+  }
+
+  bar.style.display = 'flex';
+
+  // Clone buttons to remove any previous listeners.
+  bar.querySelectorAll('.ut-rating-btn').forEach(btn => {
+    const fresh = btn.cloneNode(true);
+    btn.replaceWith(fresh);
+    fresh.addEventListener('click', () => {
+      bar.style.display = 'none';
+      utRecordCapture(false, fresh.dataset.value, perf);
+    });
+  });
+}
+
+// Download all collected test data as a JSON file.
+function utDownloadResults() {
+  // Drain all accumulated module-level perf samples (includes period-slider-triggered spectrum redraws).
+  const _ap = synthEngine.drainAllPerfSamples?.() ?? { fft: [], spectrumDraw: [], wavetablePrep: [] };
+
+  function _stats(arr) {
+    const a = arr.filter(Number.isFinite);
+    if (!a.length) return null;
+    const n = a.length;
+    const sorted = [...a].sort((x, y) => x - y);
+    const mean = a.reduce((s, v) => s + v, 0) / n;
+    const stddev = Math.sqrt(a.reduce((s, v) => s + (v - mean) ** 2, 0) / n);
+    const p95 = sorted[Math.min(n - 1, Math.ceil(0.95 * n) - 1)];
+    return {
+      n,
+      mean:   parseFloat(mean.toFixed(3)),
+      stddev: parseFloat(stddev.toFixed(3)),
+      min:    parseFloat(sorted[0].toFixed(3)),
+      max:    parseFloat(sorted[n - 1].toFixed(3)),
+      p95:    parseFloat(p95.toFixed(3)),
+    };
+  }
+
+  const _cp = userTestData.captures.map(c => c.perf);
+  userTestData.perfSummary = {
+    pipeline_ms:        _stats(_cp.map(p => p?.pipeline_ms).filter(Number.isFinite)),
+    imageProc_ms:       _stats(_cp.map(p => p?.imageProc_ms).filter(Number.isFinite)),
+    waveformExtract_ms: _stats(_cp.map(p => p?.waveformExtract_ms).filter(Number.isFinite)),
+    synthUpdate_ms:     _stats(_cp.map(p => p?.synthUpdate_ms).filter(Number.isFinite)),
+    waveformDraw_ms:    _stats(_cp.map(p => p?.waveformDraw_ms).filter(Number.isFinite)),
+    fft_ms:             _stats(_ap.fft),
+    spectrumDraw_ms:    _stats(_ap.spectrumDraw),
+    wavetablePrep_ms:   _stats(_ap.wavetablePrep),
+  };
+
+  userTestData.sessionDurationMs = parseFloat((performance.now() - _sessionStartTime).toFixed(2));
+
+  const blob = new Blob([JSON.stringify(userTestData, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `wavesynth_test_${Date.now()}.json`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+}
+
+// Wire up tracker hooks once the DOM is ready.
+window.addEventListener('DOMContentLoaded', () => {
+  // Play button counter.
+  const playBtn = document.getElementById('playSynth');
+  if (playBtn) {
+    playBtn.addEventListener('click', () => { userTestData.playPresses++; });
+  }
+
+  // Panel period tracking.
+  const periodInput = document.getElementById('waveformPeriodMs');
+  if (periodInput) {
+    periodInput.addEventListener('change', () => {
+      userTestData.periodAdjustments++;
+    });
+  }
+
+  // Info label interactions — hover (desktop) and click (mobile/keyboard).
+  document.querySelectorAll('.info-trigger').forEach(btn => {
+    const label = btn.getAttribute('aria-label') || btn.textContent.trim();
+    const record = (type) => {
+      if (!userTestData.infoLabelInteractions[label]) {
+        userTestData.infoLabelInteractions[label] = { hover: 0, click: 0 };
+      }
+      userTestData.infoLabelInteractions[label][type]++;
+    };
+    btn.addEventListener('click',      () => record('click'));
+    btn.addEventListener('mouseenter', () => record('hover'));
+  });
+
+  // Test signal generator usage.
+  const testSignalBtn = document.getElementById('testSignal');
+  const testSignalTypeEl = document.getElementById('testSignalType');
+  if (testSignalBtn) {
+    testSignalBtn.addEventListener('click', () => {
+      userTestData.testSignalUses.push(testSignalTypeEl?.value ?? null);
+    });
+  }
+
+  // ROI overlay adjustments — pointerup on processingCanvas means the user
+  // finished a drag or resize interaction.
+  const procCanvas = document.getElementById('processingCanvas');
+  if (procCanvas) {
+    procCanvas.addEventListener('pointerup', () => { userTestData.roiAdjustments++; });
+  }
+
+  // ROI reset button.
+  const resetROIBtn = document.getElementById('resetROI');
+  if (resetROIBtn) {
+    resetROIBtn.addEventListener('click', () => { userTestData.roiResets++; });
+  }
+
+  // Spectrum scale switches.
+  const scaleSelect = document.getElementById('spectrumScale');
+  if (scaleSelect) {
+    scaleSelect.addEventListener('change', () => {
+      userTestData.spectrumScaleSwitches++;
+    });
+  }
+
+  // Download test results button.
+  const downloadTestBtn = document.getElementById('downloadTestResults');
+  if (downloadTestBtn) {
+    downloadTestBtn.addEventListener('click', utDownloadResults);
+  }
+});
+
+// Called from processCapturedImage — increments attempt count and records metrics.
+function utOnCaptureAttempt(waveform, perf) {
+  const now = performance.now();
+
+  userTestData.captureAttempts++;
+
+  if (!waveform || waveform.length === 0) {
+    utRecordCapture(true, null, perf ?? null);
+    return;
+  }
+
+  if (userTestData.timeToFirstSuccessfulExtractionMs === null) {
+    userTestData.timeToFirstSuccessfulExtractionMs = parseFloat((now - _sessionStartTime).toFixed(2));
+  }
+
+  utShowCaptureRatingPrompt(perf ?? null);
 }

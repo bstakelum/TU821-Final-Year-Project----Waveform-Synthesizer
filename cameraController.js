@@ -264,6 +264,26 @@ export function createCameraController({
     roiTopPct = topPct;
     roiRightPct = rightPct;
     roiBottomPct = bottomPct;
+
+    // Enforce aspect ratio: widthPct must equal heightPct so the ROI always
+    // matches the output canvas shape. Boundary clamping above can produce
+    // different values on each axis (e.g. both edges hit 1.0 but from different
+    // offsets), so we re-enforce here after all other constraints are applied.
+    // Take the smaller of the two axes and re-centre the larger one to fit.
+    const arWidth = roiRightPct - roiLeftPct;
+    const arHeight = roiBottomPct - roiTopPct;
+    if (Math.abs(arWidth - arHeight) > 1e-9) {
+      const targetSize = Math.min(arWidth, arHeight);
+      if (arWidth > targetSize) {
+        const cx = (roiLeftPct + roiRightPct) / 2;
+        roiLeftPct = cx - targetSize / 2;
+        roiRightPct = cx + targetSize / 2;
+      } else {
+        const cy = (roiTopPct + roiBottomPct) / 2;
+        roiTopPct = cy - targetSize / 2;
+        roiBottomPct = cy + targetSize / 2;
+      }
+    }
   }
 
   // Reset the ROI to the full frame.
@@ -353,10 +373,6 @@ export function createCameraController({
     if (nearRight && nearTop) return 'top-right';
     if (nearLeft && nearBottom) return 'bottom-left';
     if (nearRight && nearBottom) return 'bottom-right';
-    if (nearLeft && insideY) return 'left';
-    if (nearRight && insideY) return 'right';
-    if (nearTop && insideX) return 'top';
-    if (nearBottom && insideX) return 'bottom';
     if (insideX && insideY) return 'move';
 
     return null;
@@ -382,12 +398,35 @@ export function createCameraController({
     let nextRightPct = startROI.rightPct;
     let nextBottomPct = startROI.bottomPct;
 
-    if (mode.includes('left')) nextLeftPct += deltaXPct;
-    if (mode.includes('right')) nextRightPct += deltaXPct;
-    if (mode.includes('top')) nextTopPct += deltaYPct;
-    if (mode.includes('bottom')) nextBottomPct += deltaYPct;
+    if (mode === 'top-left' || mode === 'top-right' || mode === 'bottom-left' || mode === 'bottom-right') {
+      // Apply each axis independently to find candidate sizes.
+      if (mode.includes('left')) nextLeftPct += deltaXPct;
+      if (mode.includes('right')) nextRightPct += deltaXPct;
+      if (mode.includes('top')) nextTopPct += deltaYPct;
+      if (mode.includes('bottom')) nextBottomPct += deltaYPct;
 
-    if (mode === 'move') {
+      // Enforce aspect ratio: widthPct must equal heightPct so the ROI always
+      // matches the output canvas shape, eliminating letterbox bars on capture.
+      // The dominant axis (larger absolute pixel delta) drives the target size.
+      const candidateWidthPct = Math.max(0, nextRightPct - nextLeftPct);
+      const candidateHeightPct = Math.max(0, nextBottomPct - nextTopPct);
+      const targetSizePct = Math.abs(deltaXPx) >= Math.abs(deltaYPx)
+        ? candidateWidthPct : candidateHeightPct;
+
+      if (mode === 'top-left') {
+        nextLeftPct = nextRightPct - targetSizePct;
+        nextTopPct = nextBottomPct - targetSizePct;
+      } else if (mode === 'top-right') {
+        nextRightPct = nextLeftPct + targetSizePct;
+        nextTopPct = nextBottomPct - targetSizePct;
+      } else if (mode === 'bottom-left') {
+        nextLeftPct = nextRightPct - targetSizePct;
+        nextBottomPct = nextTopPct + targetSizePct;
+      } else {
+        nextRightPct = nextLeftPct + targetSizePct;
+        nextBottomPct = nextTopPct + targetSizePct;
+      }
+    } else if (mode === 'move') {
       const roiWidthPct = startROI.rightPct - startROI.leftPct;
       const roiHeightPct = startROI.bottomPct - startROI.topPct;
       nextLeftPct = Math.max(0, Math.min(startROI.leftPct + deltaXPct, 1 - roiWidthPct));
@@ -416,18 +455,14 @@ export function createCameraController({
     const [[firstId, firstPoint], [secondId, secondPoint]] = points;
     const centerX = (firstPoint.x + secondPoint.x) / 2;
     const centerY = (firstPoint.y + secondPoint.y) / 2;
-    const startDX = secondPoint.x - firstPoint.x;
-    const startDY = secondPoint.y - firstPoint.y;
-    const startDistance = Math.hypot(startDX, startDY);
 
     roiTouchState = {
       type: 'pinch',
       pointerIds: [firstId, secondId],
       startCenterX: centerX,
       startCenterY: centerY,
-      startDX,
-      startDY,
-      startDistance: Math.max(1, startDistance),
+      startDX: secondPoint.x - firstPoint.x,
+      startDY: secondPoint.y - firstPoint.y,
       startROI: snapshotROI(),
     };
   }
@@ -438,51 +473,32 @@ export function createCameraController({
     const [firstPoint, secondPoint] = currentPoints;
     const centerX = (firstPoint.x + secondPoint.x) / 2;
     const centerY = (firstPoint.y + secondPoint.y) / 2;
-    const width = Math.max(1, processingCanvas.width);
-    const height = Math.max(1, processingCanvas.height);
-    const deltaCenterXPct = (centerX - touchState.startCenterX) / width;
-    const deltaCenterYPct = (centerY - touchState.startCenterY) / height;
+    const canvasWidth = Math.max(1, processingCanvas.width);
+    const canvasHeight = Math.max(1, processingCanvas.height);
+    const deltaCenterXPct = (centerX - touchState.startCenterX) / canvasWidth;
+    const deltaCenterYPct = (centerY - touchState.startCenterY) / canvasHeight;
     const startWidthPct = touchState.startROI.rightPct - touchState.startROI.leftPct;
     const startHeightPct = touchState.startROI.bottomPct - touchState.startROI.topPct;
 
-    // Improved: Only resize in dominant direction, ignore small shifts
-    const startDX = touchState.startDX || (secondPoint.x - firstPoint.x);
-    const startDY = touchState.startDY || (secondPoint.y - firstPoint.y);
+    // Use the Euclidean distance between fingers as a uniform scale factor so
+    // the ROI aspect ratio is preserved during pinch gestures.
+    const MIN_AXIS_SPREAD_PX = 10;
     const currentDX = secondPoint.x - firstPoint.x;
     const currentDY = secondPoint.y - firstPoint.y;
-    const minDelta = 8; // px, ignore tiny shifts
+    const startDist = Math.sqrt(touchState.startDX * touchState.startDX + touchState.startDY * touchState.startDY);
+    const currentDist = Math.sqrt(currentDX * currentDX + currentDY * currentDY);
+    const scale = startDist >= MIN_AXIS_SPREAD_PX ? currentDist / startDist : 1;
+    const scaleX = scale;
+    const scaleY = scale;
 
-    let scaleX = 1, scaleY = 1;
-    const absStartDX = Math.abs(startDX);
-    const absStartDY = Math.abs(startDY);
-    const absDeltaX = Math.abs(currentDX - startDX);
-    const absDeltaY = Math.abs(currentDY - startDY);
-
-    // Only resize if movement is significant
-    if (absDeltaX > minDelta || absDeltaY > minDelta) {
-      if (absDeltaX > absDeltaY * 1.5 && absStartDX > 0) {
-        // Horizontal dominant
-        scaleX = Math.abs(currentDX) / absStartDX;
-      } else if (absDeltaY > absDeltaX * 1.5 && absStartDY > 0) {
-        // Vertical dominant
-        scaleY = Math.abs(currentDY) / absStartDY;
-      } else {
-        // Diagonal or both
-        if (absStartDX > 0) scaleX = Math.abs(currentDX) / absStartDX;
-        if (absStartDY > 0) scaleY = Math.abs(currentDY) / absStartDY;
-      }
-    }
-
-    const nextWidthPct = startWidthPct * scaleX;
-    const nextHeightPct = startHeightPct * scaleY;
-    const centerXPct = ((touchState.startROI.leftPct + touchState.startROI.rightPct) / 2) + deltaCenterXPct;
-    const centerYPct = ((touchState.startROI.topPct + touchState.startROI.bottomPct) / 2) + deltaCenterYPct;
+    const centerXPct = (touchState.startROI.leftPct + touchState.startROI.rightPct) / 2 + deltaCenterXPct;
+    const centerYPct = (touchState.startROI.topPct + touchState.startROI.bottomPct) / 2 + deltaCenterYPct;
 
     clampROI(
-      centerXPct - (nextWidthPct / 2),
-      centerYPct - (nextHeightPct / 2),
-      centerXPct + (nextWidthPct / 2),
-      centerYPct + (nextHeightPct / 2),
+      centerXPct - (startWidthPct * scaleX) / 2,
+      centerYPct - (startHeightPct * scaleY) / 2,
+      centerXPct + (startWidthPct * scaleX) / 2,
+      centerYPct + (startHeightPct * scaleY) / 2,
     );
   }
 
@@ -509,7 +525,7 @@ export function createCameraController({
     roiTouchPoints.set(event.pointerId, pointer);
 
     if (roiTouchPoints.size >= 2) {
-      if (!roiTouchState || roiTouchState.type !== 'pinch') {
+      if (roiTouchState?.type !== 'pinch') {
         beginTouchPinchGesture();
       }
 
@@ -590,15 +606,11 @@ export function createCameraController({
         const hoverMode = currentStream ? getROIHitMode(pointer.x, pointer.y) : null;
         processingCanvas.style.cursor = hoverMode === 'move'
           ? 'move'
-          : hoverMode === 'left' || hoverMode === 'right'
-            ? 'ew-resize'
-            : hoverMode === 'top' || hoverMode === 'bottom'
-              ? 'ns-resize'
-              : hoverMode === 'top-left' || hoverMode === 'bottom-right'
-                ? 'nwse-resize'
-                : hoverMode === 'top-right' || hoverMode === 'bottom-left'
-                  ? 'nesw-resize'
-                  : 'default';
+          : hoverMode === 'top-left' || hoverMode === 'bottom-right'
+            ? 'nwse-resize'
+            : hoverMode === 'top-right' || hoverMode === 'bottom-left'
+              ? 'nesw-resize'
+              : 'default';
         return;
       }
 

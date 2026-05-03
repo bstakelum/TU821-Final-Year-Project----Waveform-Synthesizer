@@ -9,6 +9,9 @@ const TRACE_EXTRACTION_CONFIG = {
 };
 
 // Main entry point: turn the processed image into a normalized waveform.
+// The waveform maintains its proportional position and size within the ROI.
+// Columns with no detected trace become zero. The ROI crop directly controls
+// the scale — cropping tightly to one cycle fills the panel with one cycle.
 export function extractWaveformFromImageData(imageData) {
   if (!imageData || !Number.isFinite(imageData.width) || !Number.isFinite(imageData.height)) {
     return null;
@@ -17,10 +20,9 @@ export function extractWaveformFromImageData(imageData) {
   const { width, height } = imageData;
   if (width <= 0 || height <= 0) return null;
 
-  // With a clean processed mask, a direct per-column trace is enough.
   const tracePath = findColumnMedianTracePath(imageData);
 
-  // Keep waveform scaling tied to the full frame height.
+  // Vertical scale is relative to the full ROI height.
   const normYMin = 0;
   const normYMax = height - 1;
   const normYSpan = Math.max(1, normYMax - normYMin);
@@ -31,15 +33,10 @@ export function extractWaveformFromImageData(imageData) {
     waveform[x] = yPos >= 0 ? 1 - ((yPos - normYMin) / normYSpan) * 2 : NaN;
   }
 
-  // Center the waveform around zero.
+  // Center around zero; replace missing columns with 0.
   zeroAndCenterWaveform(waveform);
 
   return waveform;
-}
-
-// Keep a number inside a fixed range.
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
 }
 
 // Find the kth smallest value without fully sorting the array.
@@ -167,20 +164,32 @@ function findColumnMedianTracePath(imageData) {
 }
 
 
+// Persistent work buffer for median computation — avoids a heap allocation per capture.
+// 4096 entries covers any realistic canvas width.
+const _medianWorkBuffer = new Float32Array(4096);
+
 // Get the median while ignoring missing values.
+// Uses quickselect (O(n)) instead of sort (O(n log n)) to avoid allocation and comparator cost.
 function getMedianOfFiniteArray(values) {
-  const finiteValues = [];
+  let count = 0;
+  const bufLen = _medianWorkBuffer.length;
   for (let i = 0; i < values.length; i++) {
     const v = values[i];
-    if (!Number.isNaN(v)) finiteValues.push(v);
+    if (!Number.isNaN(v) && count < bufLen) {
+      _medianWorkBuffer[count++] = v;
+    }
   }
-  if (finiteValues.length === 0) return 0;
-  finiteValues.sort((a, b) => a - b);
-  const mid = Math.floor(finiteValues.length / 2);
-  if (finiteValues.length % 2 === 1) {
-    return finiteValues[mid];
+  if (count === 0) return 0;
+  const buf = _medianWorkBuffer.subarray(0, count);
+  const k = Math.floor(count / 2);
+  const upper = quickselect(buf, k);
+  if (count % 2 === 1) return upper;
+  // For even count, the lower middle is the max of elements left of k after quickselect.
+  let lower = -Infinity;
+  for (let i = 0; i < k; i++) {
+    if (buf[i] > lower) lower = buf[i];
   }
-  return (finiteValues[mid - 1] + finiteValues[mid]) / 2;
+  return (lower + upper) / 2;
 }
 
 // Center the waveform around zero and replace missing points with 0.

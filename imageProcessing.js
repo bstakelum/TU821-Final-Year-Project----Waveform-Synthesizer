@@ -26,13 +26,14 @@ export function createImageProcessor({
   };
 
   // Reuse working buffers so each frame does not keep allocating new arrays.
-  let bufferA = null, bufferB = null, lastWidth = 0, lastHeight = 0;
+  let bufferA = null, bufferB = null, bufferC = null, lastWidth = 0, lastHeight = 0;
 
   // Create buffers when the image size changes.
   function initBuffers(width, height, pixelCount) {
     if (!bufferA || lastWidth !== width || lastHeight !== height) {
       bufferA = new Uint8ClampedArray(pixelCount);
       bufferB = new Uint8ClampedArray(pixelCount);
+      bufferC = new Uint8ClampedArray(pixelCount);
       lastWidth = width;
       lastHeight = height;
     }
@@ -86,28 +87,48 @@ export function createImageProcessor({
     return new ImageData(cropped, width, height);
   }
 
-  // Restore processed (cropped) data array to original ImageData dimensions
+  // Scale the processed ROI content into the original frame dimensions using
+  // bilinear interpolation. The ROI always shares the output frame's aspect
+  // ratio (enforced by cameraController), so content fills the frame exactly
+  // with no bars — the ROI acts as a zoom without distorting the waveform shape.
   function restoreImageDataToFullSize(data, originalImageWidth, originalImageHeight, roi) {
-    const { x, y, width: roiWidth, height: roiHeight } = roi;
+    const { width: roiWidth, height: roiHeight } = roi;
     const result = new ImageData(originalImageWidth, originalImageHeight);
-    // Fill with black
-    for (let i = 0; i < result.data.length; i += 4) {
-      result.data[i] = 0;
-      result.data[i + 1] = 0;
-      result.data[i + 2] = 0;
-      result.data[i + 3] = 255;
-    }
-    // Paste processed ROI data
-    for (let row = 0; row < roiHeight; row++) {
-      for (let col = 0; col < roiWidth; col++) {
-        const dstIdx = ((y + row) * originalImageWidth + (x + col)) * 4;
-        const srcIdx = (row * roiWidth + col) * 4;
-        result.data[dstIdx] = data[srcIdx];
-        result.data[dstIdx + 1] = data[srcIdx + 1];
-        result.data[dstIdx + 2] = data[srcIdx + 2];
-        result.data[dstIdx + 3] = data[srcIdx + 3];
+
+    // The ROI is always the same aspect ratio as the output frame (enforced by
+    // cameraController.clampROI), so ROI content maps 1:1 to the full frame
+    // with no letterbox bars or pillarbox bars — a straight bilinear scale suffices.
+    for (let dstY = 0; dstY < originalImageHeight; dstY++) {
+      const srcYf = (dstY / (originalImageHeight - 1)) * (roiHeight - 1);
+      const srcY0 = Math.floor(srcYf);
+      const srcY1 = Math.min(srcY0 + 1, roiHeight - 1);
+      const ty    = srcYf - srcY0;
+
+      for (let dstX = 0; dstX < originalImageWidth; dstX++) {
+        const srcXf = (dstX / (originalImageWidth - 1)) * (roiWidth - 1);
+        const srcX0 = Math.floor(srcXf);
+        const srcX1 = Math.min(srcX0 + 1, roiWidth - 1);
+        const tx    = srcXf - srcX0;
+
+        const i00 = (srcY0 * roiWidth + srcX0) * 4;
+        const i10 = (srcY0 * roiWidth + srcX1) * 4;
+        const i01 = (srcY1 * roiWidth + srcX0) * 4;
+        const i11 = (srcY1 * roiWidth + srcX1) * 4;
+
+        const v = (data[i00] * (1 - tx) * (1 - ty))
+                + (data[i10] * tx       * (1 - ty))
+                + (data[i01] * (1 - tx) * ty)
+                + (data[i11] * tx       * ty);
+
+        const val = v >= 128 ? 255 : 0;
+        const dstIdx = (dstY * originalImageWidth + dstX) * 4;
+        result.data[dstIdx]     = val;
+        result.data[dstIdx + 1] = val;
+        result.data[dstIdx + 2] = val;
+        result.data[dstIdx + 3] = 255;
       }
     }
+
     return result;
   }
 
@@ -121,9 +142,9 @@ export function createImageProcessor({
   }
 
   // Read a percentile value from the histogram.
-  function getPercentileFromHistogram(histogram, percentile) {
+  function getPercentileFromHistogram(histogram, percentile, pixelCount) {
     const p = Math.max(0, Math.min(100, percentile));
-    const totalPixels = histogram.reduce((a, b) => a + b, 0);
+    const totalPixels = pixelCount ?? histogram.reduce((a, b) => a + b, 0);
     const targetCount = Math.floor((p / 100) * totalPixels);
     let count = 0;
     for (let i = 0; i < 256; i++) {
@@ -142,12 +163,6 @@ export function createImageProcessor({
       data[i + 2] = value;
       data[i + 3] = 255;
     }
-  }
-
-  // Look up a brightness level at a given percentile.
-  function getGrayPercentile(data, percentile) {
-    const histogram = buildHistogram(data);
-    return getPercentileFromHistogram(histogram, percentile);
   }
 
   // Convert the image to grayscale.
@@ -213,10 +228,9 @@ export function createImageProcessor({
     const radius = getEffectiveFlattenRadius(width, height);
     const bias = Number.isFinite(defaultConfig.flattenBias) ? defaultConfig.flattenBias : 128;
     const gain = Number.isFinite(defaultConfig.flattenGain) ? defaultConfig.flattenGain : 1;
-    const temp = new Uint8ClampedArray(srcData.length);
 
-    // Horizontal pass
-    horizontalBlur(width, height, srcData, temp, radius);
+    // Horizontal pass (use pooled bufferC as intermediate)
+    horizontalBlur(width, height, srcData, bufferC, radius);
 
     // Vertical pass + flatten illumination
     for (let y = 0; y < height; y++) {
@@ -224,7 +238,7 @@ export function createImageProcessor({
         const y0 = Math.max(0, y - radius), y1 = Math.min(height - 1, y + radius);
         let sum = 0, count = 0;
         for (let yy = y0; yy <= y1; yy++) {
-          sum += temp[(yy * width + x) * 4];
+          sum += bufferC[(yy * width + x) * 4];
           count++;
         }
         const idx = (y * width + x) * 4;
@@ -243,8 +257,9 @@ export function createImageProcessor({
   // Spread out the brightness range so the line stands out more.
   function enhanceContrast(srcData, dstData) {
     const histogram = buildHistogram(srcData);
-    const minValue = getPercentileFromHistogram(histogram, defaultConfig.contrastLowPercentile);
-    const maxValue = getPercentileFromHistogram(histogram, defaultConfig.contrastHighPercentile);
+    const pixelCount = srcData.length / 4;
+    const minValue = getPercentileFromHistogram(histogram, defaultConfig.contrastLowPercentile, pixelCount);
+    const maxValue = getPercentileFromHistogram(histogram, defaultConfig.contrastHighPercentile, pixelCount);
     const range = maxValue - minValue;
 
     if (range < 1) {
@@ -263,9 +278,7 @@ export function createImageProcessor({
 
   // Fill short horizontal gaps in the line.
   function horizontalClose(width, height, srcData, dstData, radius) {
-    const temp = new Uint8ClampedArray(srcData.length);
-
-    // Spread bright pixels left and right.
+    // Spread bright pixels left and right (use pooled bufferC as intermediate).
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         let fg = false;
@@ -274,8 +287,8 @@ export function createImageProcessor({
           if (srcData[(y * width + xx) * 4] === 255) { fg = true; break; }
         }
         const idx = (y * width + x) * 4;
-        temp[idx] = temp[idx + 1] = temp[idx + 2] = fg ? 255 : 0;
-        temp[idx + 3] = 255;
+        bufferC[idx] = bufferC[idx + 1] = bufferC[idx + 2] = fg ? 255 : 0;
+        bufferC[idx + 3] = 255;
       }
     }
 
@@ -285,7 +298,7 @@ export function createImageProcessor({
         let allWhite = true;
         const x0 = Math.max(0, x - radius), x1 = Math.min(width - 1, x + radius);
         for (let xx = x0; xx <= x1; xx++) {
-          if (temp[(y * width + xx) * 4] !== 255) { allWhite = false; break; }
+          if (bufferC[(y * width + xx) * 4] !== 255) { allWhite = false; break; }
         }
         const idx = (y * width + x) * 4;
         const val = allWhite ? 255 : 0;
@@ -353,11 +366,9 @@ export function createImageProcessor({
         const component = floodFill(i);
         if (component.size >= minSizePixels) {
           const widthSpan = component.maxX - component.minX + 1;
-          const heightSpan = component.maxY - component.minY + 1;
           const columnsWithPixels = new Uint16Array(widthSpan);
           const columnMinY = new Int16Array(widthSpan);
           const columnMaxY = new Int16Array(widthSpan);
-          const columnCenterY = new Float32Array(widthSpan);
           columnMinY.fill(-1);
           columnMaxY.fill(-1);
 
@@ -376,36 +387,22 @@ export function createImageProcessor({
           }
 
           let occupiedColumns = 0;
-          let totalColumnThickness = 0;
           let topTouchColumns = 0;
           let bottomTouchColumns = 0;
           let minCenterY = height;
           let maxCenterY = 0;
-          let continuityDeltaSum = 0;
-          let continuitySteps = 0;
-          let prevCenterY = NaN;
           const edgeMargin = Math.max(0, defaultConfig.componentEdgeMarginPx);
 
           for (let localX = 0; localX < widthSpan; localX++) {
             if (columnsWithPixels[localX] <= 0) continue;
             occupiedColumns++;
 
-            const localThickness = columnMaxY[localX] - columnMinY[localX] + 1;
-            totalColumnThickness += localThickness;
-
             if (columnMinY[localX] <= edgeMargin) topTouchColumns++;
             if (columnMaxY[localX] >= height - 1 - edgeMargin) bottomTouchColumns++;
 
             const centerY = (columnMinY[localX] + columnMaxY[localX]) / 2;
-            columnCenterY[localX] = centerY;
             if (centerY < minCenterY) minCenterY = centerY;
             if (centerY > maxCenterY) maxCenterY = centerY;
-
-            if (Number.isFinite(prevCenterY)) {
-              continuityDeltaSum += Math.abs(centerY - prevCenterY);
-              continuitySteps++;
-            }
-            prevCenterY = centerY;
           }
 
           // Remove widthCoverageRatio, thinnessPreference, and continuityPreference from scoring
@@ -421,15 +418,7 @@ export function createImageProcessor({
             * borderAvoidancePreference;
 
           components.push({
-            ...component,
-            widthSpan,
-            heightSpan,
-            occupiedColumns,
-            centerlineExcursion,
-            borderTouchRatio,
-            baseWidthScore,
-            excursionFactor: excursionPreference,
-            borderFactor: borderAvoidancePreference,
+            label: component.label,
             waveformScore,
           });
         }
@@ -439,22 +428,11 @@ export function createImageProcessor({
 
     // Prefer a long, thin, waveform-like component over a large blob.
     if (components.length > 0) {
-      const rankedComponents = components.map((component) => {
-        const rankingScore = component.waveformScore;
-        return {
-          ...component,
-          rankingScore,
-        };
-      });
-
-      const bestRankingScore = Math.max(
-        1e-6,
-        ...rankedComponents.map((component) => component.rankingScore)
-      );
+      const bestScore = Math.max(1e-6, ...components.map((c) => c.waveformScore));
       const componentIntensityByLabel = new Map();
 
-      for (const component of rankedComponents) {
-        const normalizedScore = component.rankingScore / bestRankingScore;
+      for (const component of components) {
+        const normalizedScore = component.waveformScore / bestScore;
         const dampedStrength = Math.pow(Math.max(0, Math.min(1, normalizedScore)), defaultConfig.componentScoreGamma);
         componentIntensityByLabel.set(component.label, Math.round(255 * dampedStrength));
       }
