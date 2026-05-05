@@ -151,8 +151,7 @@ function findColumnMedianTracePath(imageData) {
     if (!Number.isFinite(yEstimate)) {
       continue;
     }
-    const quantizedY = Math.round(yEstimate);
-    pathY[x] = quantizedY;
+    pathY[x] = yEstimate; // keep as float so the median filter can smooth sub-pixel positions
   }
   // Smooth the path and round it to pixel positions.
   const smoothed = medianFilterFinite1D(pathY, settings.medianRadius, workBuffer);

@@ -64,7 +64,8 @@ The `Camera Mode` button in the Analysis view returns to the Camera view, and if
 ### 1. Camera Capture
 
 The app captures a single video frame from the selected camera.
-The ROI overlay is used to limit the part of the image that the user wants to use.
+The ROI overlay is used to select the part of the image that the user wants to process.
+The selected region is cropped and scaled up to fill the full processing canvas before the cleanup pipeline runs, so the pipeline always works at full resolution regardless of how small the ROI is.
 
 ### 2. Image Cleanup
 
@@ -76,10 +77,11 @@ This stage includes:
 - illumination flattening
 - contrast stretching
 - short horizontal gap closing
-- connected-component scoring that prefers wide, thin, continuous, non-border-hugging waveform shapes
-- binary mask
+- connected-component scoring that selects the single best waveform-like component (widest span, vertical excursion, avoids image borders) and discards everything else
+- upscale back to full output resolution using bilinear interpolation
+- binary mask applied after upscaling for crisper edges
 
-The ROI limits restricts what parts of the image are exposed to the image processing pipeline.
+The ROI crop restricts which part of the image enters the pipeline, and the result is scaled back up to the full canvas size before extraction.
 
 ### 3. Waveform Extraction
 
@@ -112,7 +114,7 @@ The Nyquist line is shown as a guide to the highest frequency a sampled signal c
 - `Reset ROI`: resets the ROI to the full frame
 - `Front/Back`: switches between available cameras
 - `Analysis Mode` : mobile-only button that returns to the analysis view
-- `ROI Overlay` : On desktop, grab overlay to resize and move ROI. On touch devices, pinch to resize ROI and drag to move box.
+- `ROI Overlay` : On desktop, grab the overlay edge or corner to resize and move the ROI. On touch devices, use one finger to drag the box and two fingers to resize — the ROI maintains its aspect ratio during resizing.
 
 ### Waveform Controls
 

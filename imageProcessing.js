@@ -17,7 +17,6 @@ export function createImageProcessor({
 
     // Component scoring
     minComponentSizePixels: 50, // Small blobs below this size are discarded.
-    componentScoreGamma: 1.35, // Pushes weaker components down faster while leaving the best one untouched.
     componentEdgeMarginPx: 4, // Edge band used to penalize border-hugging components.
     componentExcursionWidthRatio: 0.2, // Expected vertical movement relative to width for a waveform-like path.
     componentExcursionGamma: 1.6, // Makes low-excursion regions earn less reward until their bend is clearer.
@@ -29,11 +28,11 @@ export function createImageProcessor({
   let bufferA = null, bufferB = null, bufferC = null, lastWidth = 0, lastHeight = 0;
 
   // Create buffers when the image size changes.
-  function initBuffers(width, height, pixelCount) {
+  function initBuffers(width, height, byteCount) {
     if (!bufferA || lastWidth !== width || lastHeight !== height) {
-      bufferA = new Uint8ClampedArray(pixelCount);
-      bufferB = new Uint8ClampedArray(pixelCount);
-      bufferC = new Uint8ClampedArray(pixelCount);
+      bufferA = new Uint8ClampedArray(byteCount);
+      bufferB = new Uint8ClampedArray(byteCount);
+      bufferC = new Uint8ClampedArray(byteCount);
       lastWidth = width;
       lastHeight = height;
     }
@@ -48,10 +47,10 @@ export function createImageProcessor({
     imageData = cropImageDataToROI(imageData, roi);
 
     const { data, width, height } = imageData;
-    const pixelCount = data.length;
-    initBuffers(width, height, pixelCount);
+    const byteCount = data.length;
+    initBuffers(width, height, byteCount);
 
-    // Move through the cleanup steps ubsing the same two buffers.
+    // Move through the cleanup steps using the same two buffers.
     rgbaToGrayscale(data, bufferB);
     denoiseImage(width, height, bufferB, bufferA);
     flattenIllumination(width, height, bufferA, bufferB);
@@ -60,14 +59,14 @@ export function createImageProcessor({
     // Join short horizontal breaks in the line.
     horizontalClose(width, height, bufferA, bufferB, 2);
 
-    // Damp weaker components after binary cleanup so non-winning regions survive as weaker traces.
+    // Filter components of image to prefer waveform like shapes.
     filterByConnectedComponents(width, height, bufferB, defaultConfig.minComponentSizePixels);
 
-    // Re-binarize after component scoring so only strong waveform-like regions remain.
-    applyBinaryMask(bufferB);
-
-    // Build the processed image output.
+    // Build the processed image output — upscale the grayscale buffer first.
     const result = restoreImageDataToFullSize(bufferB, originalWidth, originalHeight, roi);
+
+    // Binarize image
+    applyBinaryMask(result.data);
 
     return result;
   }
@@ -95,9 +94,6 @@ export function createImageProcessor({
     const { width: roiWidth, height: roiHeight } = roi;
     const result = new ImageData(originalImageWidth, originalImageHeight);
 
-    // The ROI is always the same aspect ratio as the output frame (enforced by
-    // cameraController.clampROI), so ROI content maps 1:1 to the full frame
-    // with no letterbox bars or pillarbox bars — a straight bilinear scale suffices.
     for (let dstY = 0; dstY < originalImageHeight; dstY++) {
       const srcYf = (dstY / (originalImageHeight - 1)) * (roiHeight - 1);
       const srcY0 = Math.floor(srcYf);
@@ -115,12 +111,12 @@ export function createImageProcessor({
         const i01 = (srcY1 * roiWidth + srcX0) * 4;
         const i11 = (srcY1 * roiWidth + srcX1) * 4;
 
-        const v = (data[i00] * (1 - tx) * (1 - ty))
-                + (data[i10] * tx       * (1 - ty))
-                + (data[i01] * (1 - tx) * ty)
-                + (data[i11] * tx       * ty);
-
-        const val = v >= 128 ? 255 : 0;
+        const val = Math.round(
+          (data[i00] * (1 - tx) * (1 - ty))
+        + (data[i10] * tx       * (1 - ty))
+        + (data[i01] * (1 - tx) * ty)
+        + (data[i11] * tx       * ty)
+        );
         const dstIdx = (dstY * originalImageWidth + dstX) * 4;
         result.data[dstIdx]     = val;
         result.data[dstIdx + 1] = val;
@@ -426,20 +422,12 @@ export function createImageProcessor({
       }
     }
 
-    // Prefer a long, thin, waveform-like component over a large blob.
+    // Keep only the single best-scoring component; zero out everything else.
     if (components.length > 0) {
-      const bestScore = Math.max(1e-6, ...components.map((c) => c.waveformScore));
-      const componentIntensityByLabel = new Map();
-
-      for (const component of components) {
-        const normalizedScore = component.waveformScore / bestScore;
-        const dampedStrength = Math.pow(Math.max(0, Math.min(1, normalizedScore)), defaultConfig.componentScoreGamma);
-        componentIntensityByLabel.set(component.label, Math.round(255 * dampedStrength));
-      }
+      const bestLabel = components.reduce((best, c) => c.waveformScore > best.waveformScore ? c : best).label;
 
       for (let i = 0; i < n; i++) {
-        const componentLabel = label[i];
-        const value = componentIntensityByLabel.get(componentLabel) ?? 0;
+        const value = label[i] === bestLabel ? 255 : 0;
         data[(i) * 4] = value;
         data[(i) * 4 + 1] = value;
         data[(i) * 4 + 2] = value;
