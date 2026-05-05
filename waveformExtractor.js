@@ -202,4 +202,3 @@ function zeroAndCenterWaveform(waveform) {
     }
   }
 }
-

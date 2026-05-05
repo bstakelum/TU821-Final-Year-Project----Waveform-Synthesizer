@@ -213,6 +213,7 @@ label {
 
 .info-label {
   font-weight: 600;
+  color: #ffffff;
 }
 
 .info-inline {
@@ -225,10 +226,10 @@ label {
   min-width: 1.35rem;
   height: 1.35rem;
   padding: 0 0.35rem;
-  border: 1px solid #475569;
+  border: 1px solid #fbbf24;
   border-radius: 999px;
   background: #0f172a;
-  color: #cbd5e1;
+  color: #fbbf24;
   font-size: 0.75rem;
   line-height: 1;
   display: inline-flex;
@@ -239,8 +240,8 @@ label {
 .info-trigger:hover,
 .info-trigger:focus-visible {
   background: #1e293b;
-  border-color: #7dd3fc;
-  color: #f8fafc;
+  border-color: #fbbf24;
+  color: #fbbf24;
   outline: none;
 }
 
@@ -430,7 +431,6 @@ button {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  color: #ddd;
 }
 
 .spectrum-controls {
