@@ -511,38 +511,80 @@ const userTestData = {
   sessionStart: new Date().toISOString(),
   device: DEVICE_MODE_MEDIA_QUERY.matches ? 'mobile' : 'desktop',
   browser: navigator.userAgent,
-  timeToFirstSuccessfulExtractionMs: null,
-  captureAttempts: 0,
-  playPresses: 0,
-  periodAdjustments: 0,
-  testSignalUses: [],
-  roiAdjustments: 0,
-  roiResets: 0,
-  spectrumScaleSwitches: 0,
-  infoLabelInteractions: {},
-  captures: [],
+  sessionDurationMs: null,
+
+  // Session-level totals — one counter per trackable UI element.
+  totals: {
+    captureAttempts: 0,
+    successfulCaptures: 0,
+    playPresses: 0,
+    periodAdjustments: 0,
+    spectrumScaleSwitches: 0,
+    roiAdjustments: 0,
+    roiResets: 0,
+    infoLabelClicks: 0,
+    infoLabelHovers: 0,
+    testSignalGenerations: 0,
+  },
+
+  infoLabelInteractions: {}, // per-label hover + click detail
+  testSignalUses: [],        // { shape, uiAfterCapture } per generation
+  captures: [],              // { index, timestamp, msSinceLastCapture, wasNull, userRating, uiAfterCapture }
 };
 
 const _sessionStartTime = performance.now();
 
-// Record a per-capture entry.
-function utRecordCapture(wasNull, userRating, perf) {
-  userTestData.captures.push({
-    index: userTestData.captureAttempts,
+// Interactions accumulated since the last capture or test signal entry was recorded.
+// These represent what the user did AFTER seeing the previous result.
+// Flushed into that entry's uiAfterCapture field when the next event fires.
+let _pendingInteractions = {
+  playPresses: 0,
+  periodAdjustments: 0,
+  spectrumScaleSwitches: 0,
+  roiAdjustments: 0,
+  roiResets: 0,
+  infoLabelClicks: 0,
+  infoLabelHovers: 0,
+};
+
+// The most recent capture or testSignal entry, awaiting its uiAfterCapture fill.
+let _lastEventEntry = null;
+let _lastCaptureTime = null; // performance.now() at the previous capture attempt
+let _perfSamples = [];    // pipeline perf objects collected separately from capture entries
+
+// Copy pending interactions into the previous entry and reset the counters.
+// Called at the start of each new capture attempt or test signal generation,
+// and at download time to capture any trailing interactions after the last event.
+function _flushPendingToLastEntry() {
+  if (_lastEventEntry !== null) {
+    _lastEventEntry.uiAfterCapture = { ..._pendingInteractions };
+  }
+  for (const key of Object.keys(_pendingInteractions)) {
+    _pendingInteractions[key] = 0;
+  }
+}
+
+// Record a per-capture entry. uiAfterCapture starts null and is filled when the next event fires.
+function utRecordCapture(wasNull, userRating, msSinceLastCapture) {
+  const entry = {
+    index: userTestData.totals.captureAttempts,
     timestamp: new Date().toISOString(),
-    perf: perf ?? null,
+    msSinceLastCapture: msSinceLastCapture ?? null,
     wasNull,
     userRating: userRating ?? null,
-  });
+    uiAfterCapture: null,
+  };
+  userTestData.captures.push(entry);
+  _lastEventEntry = entry;
 }
 
 // Show the single-question rating bar below the waveform after a successful capture.
-function utShowCaptureRatingPrompt(perf) {
+function utShowCaptureRatingPrompt(msSinceLastCapture) {
+  // Record immediately with "No rating" — updated if the user clicks a rating button.
+  utRecordCapture(false, 'No rating', msSinceLastCapture);
+
   const bar = document.getElementById('utRatingBar');
-  if (!bar) {
-    utRecordCapture(false, null, perf);
-    return;
-  }
+  if (!bar) return;
 
   bar.style.display = 'flex';
 
@@ -552,14 +594,17 @@ function utShowCaptureRatingPrompt(perf) {
     btn.replaceWith(fresh);
     fresh.addEventListener('click', () => {
       bar.style.display = 'none';
-      utRecordCapture(false, fresh.dataset.value, perf);
+      // Update the already-recorded entry with the actual rating.
+      if (_lastEventEntry) _lastEventEntry.userRating = fresh.dataset.value;
     });
   });
 }
 
 // Download all collected test data as a JSON file.
 function utDownloadResults() {
-  // Drain all accumulated module-level perf samples (includes period-slider-triggered spectrum redraws).
+  // Flush any trailing interactions after the last capture into that entry.
+  _flushPendingToLastEntry();
+
   const _ap = synthEngine.drainAllPerfSamples?.() ?? { fft: [], spectrumDraw: [], wavetablePrep: [] };
 
   function _stats(arr) {
@@ -580,7 +625,7 @@ function utDownloadResults() {
     };
   }
 
-  const _cp = userTestData.captures.map(c => c.perf);
+  const _cp = _perfSamples;
   userTestData.perfSummary = {
     pipeline_ms:        _stats(_cp.map(p => p?.pipeline_ms).filter(Number.isFinite)),
     imageProc_ms:       _stats(_cp.map(p => p?.imageProc_ms).filter(Number.isFinite)),
@@ -606,21 +651,23 @@ function utDownloadResults() {
 
 // Wire up tracker hooks once the DOM is ready.
 window.addEventListener('DOMContentLoaded', () => {
-  // Play button counter.
   const playBtn = document.getElementById('playSynth');
   if (playBtn) {
-    playBtn.addEventListener('click', () => { userTestData.playPresses++; });
-  }
-
-  // Panel period tracking.
-  const periodInput = document.getElementById('waveformPeriodMs');
-  if (periodInput) {
-    periodInput.addEventListener('change', () => {
-      userTestData.periodAdjustments++;
+    playBtn.addEventListener('click', () => {
+      userTestData.totals.playPresses++;
+      _pendingInteractions.playPresses++;
     });
   }
 
-  // Info label interactions — hover (desktop) and click (mobile/keyboard).
+  const periodInput = document.getElementById('waveformPeriodMs');
+  if (periodInput) {
+    periodInput.addEventListener('change', () => {
+      userTestData.totals.periodAdjustments++;
+      _pendingInteractions.periodAdjustments++;
+    });
+  }
+
+  // Info label interactions — track hover and click separately per label, and in pending totals.
   document.querySelectorAll('.info-trigger').forEach(btn => {
     const label = btn.getAttribute('aria-label') || btn.textContent.trim();
     const record = (type) => {
@@ -628,62 +675,79 @@ window.addEventListener('DOMContentLoaded', () => {
         userTestData.infoLabelInteractions[label] = { hover: 0, click: 0 };
       }
       userTestData.infoLabelInteractions[label][type]++;
+      if (type === 'click') {
+        userTestData.totals.infoLabelClicks++;
+        _pendingInteractions.infoLabelClicks++;
+      } else {
+        userTestData.totals.infoLabelHovers++;
+        _pendingInteractions.infoLabelHovers++;
+      }
     };
     btn.addEventListener('click',      () => record('click'));
     btn.addEventListener('mouseenter', () => record('hover'));
   });
 
-  // Test signal generator usage.
+  // Test signal generator — flush pending into previous entry, then record this generation.
   const testSignalBtn = document.getElementById('testSignal');
   const testSignalTypeEl = document.getElementById('testSignalType');
   if (testSignalBtn) {
     testSignalBtn.addEventListener('click', () => {
-      userTestData.testSignalUses.push(testSignalTypeEl?.value ?? null);
+      _flushPendingToLastEntry();
+      userTestData.totals.testSignalGenerations++;
+      const entry = { shape: testSignalTypeEl?.value ?? null, uiAfterCapture: null };
+      userTestData.testSignalUses.push(entry);
+      _lastEventEntry = entry;
     });
   }
 
-  // ROI overlay adjustments — pointerup on processingCanvas means the user
-  // finished a drag or resize interaction.
   const procCanvas = document.getElementById('processingCanvas');
   if (procCanvas) {
-    procCanvas.addEventListener('pointerup', () => { userTestData.roiAdjustments++; });
+    procCanvas.addEventListener('pointerup', () => {
+      userTestData.totals.roiAdjustments++;
+      _pendingInteractions.roiAdjustments++;
+    });
   }
 
-  // ROI reset button.
   const resetROIBtn = document.getElementById('resetROI');
   if (resetROIBtn) {
-    resetROIBtn.addEventListener('click', () => { userTestData.roiResets++; });
+    resetROIBtn.addEventListener('click', () => {
+      userTestData.totals.roiResets++;
+      _pendingInteractions.roiResets++;
+    });
   }
 
-  // Spectrum scale switches.
   const scaleSelect = document.getElementById('spectrumScale');
   if (scaleSelect) {
     scaleSelect.addEventListener('change', () => {
-      userTestData.spectrumScaleSwitches++;
+      userTestData.totals.spectrumScaleSwitches++;
+      _pendingInteractions.spectrumScaleSwitches++;
     });
   }
 
-  // Download test results button.
   const downloadTestBtn = document.getElementById('downloadTestResults');
   if (downloadTestBtn) {
     downloadTestBtn.addEventListener('click', utDownloadResults);
   }
 });
 
-// Called from processCapturedImage — increments attempt count and records metrics.
+// Called from processCapturedImage — flush post-previous-capture interactions, then record this attempt.
 function utOnCaptureAttempt(waveform, perf) {
-  const now = performance.now();
+  _flushPendingToLastEntry();
 
-  userTestData.captureAttempts++;
+  const now = performance.now();
+  const msSinceLast = _lastCaptureTime !== null
+    ? parseFloat((now - _lastCaptureTime).toFixed(2))
+    : null;
+  _lastCaptureTime = now;
+
+  userTestData.totals.captureAttempts++;
+  if (perf) _perfSamples.push(perf);
 
   if (!waveform || waveform.length === 0) {
-    utRecordCapture(true, null, perf ?? null);
+    utRecordCapture(true, null, msSinceLast);
     return;
   }
 
-  if (userTestData.timeToFirstSuccessfulExtractionMs === null) {
-    userTestData.timeToFirstSuccessfulExtractionMs = parseFloat((now - _sessionStartTime).toFixed(2));
-  }
-
-  utShowCaptureRatingPrompt(perf ?? null);
+  userTestData.totals.successfulCaptures++;
+  utShowCaptureRatingPrompt(msSinceLast);
 }
