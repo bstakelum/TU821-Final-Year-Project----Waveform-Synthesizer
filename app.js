@@ -600,7 +600,7 @@ function utShowCaptureRatingPrompt(msSinceLastCapture) {
   });
 }
 
-// Download all collected test data as a JSON file.
+// Download all collected test data as a plain-text file.
 function utDownloadResults() {
   // Flush any trailing interactions after the last capture into that entry.
   _flushPendingToLastEntry();
@@ -639,11 +639,11 @@ function utDownloadResults() {
 
   userTestData.sessionDurationMs = parseFloat((performance.now() - _sessionStartTime).toFixed(2));
 
-  const blob = new Blob([JSON.stringify(userTestData, null, 2)], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify(userTestData, null, 2)], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `wavesynth_test_${Date.now()}.json`;
+  a.download = 'user_testing_results.txt';
   document.body.appendChild(a);
   a.click();
   setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
