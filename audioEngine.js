@@ -9,7 +9,7 @@ export function createSynthAudioEngine({
   // Default time for one full waveform loop. The slider can change this.
   const DEFAULT_PANEL_DURATION_SECONDS = 0.01;
   const MIN_PANEL_DURATION_SECONDS = 0.001; // 1 ms
-  const MAX_PANEL_DURATION_SECONDS = 0.015; // 15 ms
+  const MAX_PANEL_DURATION_SECONDS = 0.020; // 20 ms
   const ATTACK_SECONDS = 0.02;
   const RELEASE_SECONDS = 0.05;
   const SPECTRUM_BAR_COUNT = 160;
@@ -23,6 +23,7 @@ export function createSynthAudioEngine({
   let masterGainNode = null;
   let preparedWavetable = null;
   let activeSourceNode = null;
+  let activeRepeatCount = 1;
   let isActive = false;
   let spectrumScale = DEFAULT_SPECTRUM_SCALE;
   let panelDurationSeconds = DEFAULT_PANEL_DURATION_SECONDS;
@@ -65,8 +66,9 @@ export function createSynthAudioEngine({
     panelDurationSeconds = sanitizePanelDurationSeconds(seconds);
 
     if (activeSourceNode && audioContext && preparedWavetable && preparedWavetable.length > 0) {
+      const tiledLength = preparedWavetable.length * activeRepeatCount;
       const desiredLoopFrequencyHz = 1 / panelDurationSeconds;
-      const baseTableFrequency = audioContext.sampleRate / preparedWavetable.length;
+      const baseTableFrequency = audioContext.sampleRate / tiledLength;
       const playbackRate = desiredLoopFrequencyHz / baseTableFrequency;
       activeSourceNode.playbackRate.setValueAtTime(playbackRate, audioContext.currentTime);
     }
@@ -618,15 +620,26 @@ export function createSynthAudioEngine({
       activeSourceNode = null;
     }
 
-    const tableBuffer = audioContext.createBuffer(1, preparedWavetable.length, audioContext.sampleRate);
-    tableBuffer.copyToChannel(preparedWavetable, 0, 0);
+    // Tile the waveform so the AudioBuffer is at least MAX_PANEL_DURATION_SECONDS long.
+    // This keeps playbackRate >= 1 for all valid periods, avoiding mobile browser
+    // issues where AudioBufferSourceNode becomes inaudible when playbackRate < 1
+    // on short loop buffers (threshold coincides with N/sampleRate seconds).
+    const minBufferSamples = Math.ceil(MAX_PANEL_DURATION_SECONDS * audioContext.sampleRate);
+    const repeatCount = Math.max(1, Math.ceil(minBufferSamples / preparedWavetable.length));
+    const tiledLength = preparedWavetable.length * repeatCount;
+    const tableBuffer = audioContext.createBuffer(1, tiledLength, audioContext.sampleRate);
+    const channel = tableBuffer.getChannelData(0);
+    for (let i = 0; i < repeatCount; i++) {
+      channel.set(preparedWavetable, i * preparedWavetable.length);
+    }
+    activeRepeatCount = repeatCount;
 
     const source = audioContext.createBufferSource();
     source.buffer = tableBuffer;
     source.loop = true;
 
     const desiredLoopFrequencyHz = 1 / panelDurationSeconds;
-    const baseTableFrequency = audioContext.sampleRate / preparedWavetable.length;
+    const baseTableFrequency = audioContext.sampleRate / tiledLength;
     const playbackRate = desiredLoopFrequencyHz / baseTableFrequency;
     source.playbackRate.setValueAtTime(playbackRate, audioContext.currentTime);
 

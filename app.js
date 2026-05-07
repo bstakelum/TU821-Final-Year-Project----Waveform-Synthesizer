@@ -36,7 +36,7 @@ const synthEngine = createSynthAudioEngine({
 });
 
 const MIN_PANEL_PERIOD_MS = 1;
-const MAX_PANEL_PERIOD_MS = 15;
+const MAX_PANEL_PERIOD_MS = 20;
 const MOBILE_VIEW_MODES = {
   GENERATION: 'generation',
   ANALYSIS: 'analysis',
@@ -266,7 +266,7 @@ function createTestWaveform(length, {
 
     switch (waveformType) {
       case 'square':
-        value = ((safeCycles * t % 1) < 0.5) ? 1 : -1;
+        value = Math.sign(Math.sin(angle));
         break;
       case 'triangle':
         value = (2 / Math.PI) * Math.asin(Math.sin(angle));
@@ -296,6 +296,13 @@ function createTestWaveform(length, {
     for (let i = 0; i < length; i++) {
       out[i] *= gain;
     }
+  }
+
+  // Square wave: the last sample sits one sample before the loop-back point
+  // (t = (N-1)/N, still inside the negative half-cycle). Force it to zero so
+  // the cycle visually closes at the centre line, matching sample[0].
+  if (waveformType === 'square' && out.length > 0) {
+    out[out.length - 1] = 0;
   }
 
   return out;
