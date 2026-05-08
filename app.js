@@ -646,6 +646,7 @@ function utDownloadResults() {
     spectrumDraw_ms:    _stats(_ap.spectrumDraw),
     wavetablePrep_ms:   _stats(_ap.wavetablePrep),
     heapDeltaMB:        _stats(_heapDeltas),
+    heapBeforeMB:       _stats(_cp.map(p => p?.heapUsedMB_before).filter(Number.isFinite)),
   };
 
   userTestData.sessionDurationMs = parseFloat((performance.now() - _sessionStartTime).toFixed(2));
