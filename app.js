@@ -633,6 +633,9 @@ function utDownloadResults() {
   }
 
   const _cp = _perfSamples;
+  const _heapDeltas = _cp
+    .filter(p => p?.heapUsedMB_before != null && p?.heapUsedMB_after != null)
+    .map(p => parseFloat((p.heapUsedMB_after - p.heapUsedMB_before).toFixed(2)));
   userTestData.perfSummary = {
     pipeline_ms:        _stats(_cp.map(p => p?.pipeline_ms).filter(Number.isFinite)),
     imageProc_ms:       _stats(_cp.map(p => p?.imageProc_ms).filter(Number.isFinite)),
@@ -642,6 +645,7 @@ function utDownloadResults() {
     fft_ms:             _stats(_ap.fft),
     spectrumDraw_ms:    _stats(_ap.spectrumDraw),
     wavetablePrep_ms:   _stats(_ap.wavetablePrep),
+    heapDeltaMB:        _stats(_heapDeltas),
   };
 
   userTestData.sessionDurationMs = parseFloat((performance.now() - _sessionStartTime).toFixed(2));
