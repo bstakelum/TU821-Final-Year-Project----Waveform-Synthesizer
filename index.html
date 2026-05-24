@@ -98,8 +98,6 @@
               <input id="waveformPeriodMs" type="range" min="1" max="20" step="1" value="10" />
               <span id="waveformPeriodValue" style="margin-left:8px;min-width:36px;display:inline-block;">10</span>
               <button id="downloadWaveform" class="btn-default" style="margin-top:8px;">Download Waveform (.csv)</button>
-              <!-- USER TESTING: Remove after FYP submission. -->
-              <button id="downloadTestResults" class="btn-default" style="margin-top:6px;">Download Test Results (.txt)</button>
             </div>
           </div>
         </div>
@@ -142,12 +140,5 @@
 
   <script type="module" src="app.js"></script>
 
-  <!-- USER TESTING: Per-capture rating bar. Remove after FYP submission. -->
-  <div id="utRatingBar" style="display:none;position:fixed;bottom:0;left:0;right:0;background:#1e293b;border-top:1px solid #334155;z-index:9999;padding:10px 16px;display:none;align-items:center;justify-content:center;gap:14px;flex-wrap:wrap;font-family:sans-serif;font-size:0.95em;color:#f1f5f9;">
-    <span style="font-weight:600;">Did the waveform look correct?</span>
-    <button class="ut-rating-btn" data-value="yes"  style="background:#22c55e;color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:0.95em;cursor:pointer;">Yes</button>
-    <button class="ut-rating-btn" data-value="partly" style="background:#f59e0b;color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:0.95em;cursor:pointer;">Partly</button>
-    <button class="ut-rating-btn" data-value="no"   style="background:#ef4444;color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:0.95em;cursor:pointer;">No</button>
-  </div>
 </body>
 </html>

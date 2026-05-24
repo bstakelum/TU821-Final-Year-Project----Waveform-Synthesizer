@@ -51,6 +51,7 @@ updateWaveformPeriodNote();
 
 // Create the image cleanup pipeline.
 const imageProcessor = createImageProcessor({});
+
 // Create the camera controller.
 const cameraController = createCameraController({
   video,
@@ -298,9 +299,7 @@ function createTestWaveform(length, {
     }
   }
 
-  // Square wave: the last sample sits one sample before the loop-back point
-  // (t = (N-1)/N, still inside the negative half-cycle). Force it to zero so
-  // the cycle visually closes at the centre line, matching sample[0].
+  // Clamp the last square-wave sample to zero so the cycle closes cleanly at the centreline.
   if (waveformType === 'square' && out.length > 0) {
     out[out.length - 1] = 0;
   }
@@ -316,57 +315,15 @@ function clampNumber(value, min, max, fallback) {
 
 // Turn one captured frame into a waveform and update the app.
 function processCapturedImage(imageData, roi) {
-  const _t0 = performance.now();
-  const _heapBefore = performance.memory
-    ? parseFloat((performance.memory.usedJSHeapSize / 1048576).toFixed(2)) : null;
-
-  const _t1 = performance.now();
   const processedImageData = imageProcessor.preprocessImage(imageData, roi);
-  const _imageProcMs = parseFloat((performance.now() - _t1).toFixed(2));
+  if (!processedImageData) return;
 
-  if (!processedImageData) {
-    utOnCaptureAttempt(null, { imageProc_ms: _imageProcMs });
-    return;
-  }
-
-  const _t2 = performance.now();
   const waveform = extractWaveformFromImageData(processedImageData);
-  const _extractMs = parseFloat((performance.now() - _t2).toFixed(2));
-
-  if (!waveform || waveform.length === 0) {
-    utOnCaptureAttempt(waveform, { imageProc_ms: _imageProcMs, waveformExtract_ms: _extractMs });
-    return;
-  }
+  if (!waveform || waveform.length === 0) return;
 
   lastRenderedWaveform = waveform;
-
-  const _t3 = performance.now();
   synthEngine.updateWaveform(lastRenderedWaveform);
-  const _synthUpdateMs = parseFloat((performance.now() - _t3).toFixed(2));
-
-  const _t4 = performance.now();
   drawWaveform(lastRenderedWaveform);
-  const _waveformDrawMs = parseFloat((performance.now() - _t4).toFixed(2));
-
-  const _heapAfter = performance.memory
-    ? parseFloat((performance.memory.usedJSHeapSize / 1048576).toFixed(2)) : null;
-  const _pipelineMs = parseFloat((performance.now() - _t0).toFixed(2));
-
-  const _ap = synthEngine.getLastPerfMs();
-  const perf = {
-    pipeline_ms:        _pipelineMs,
-    imageProc_ms:       _imageProcMs,
-    waveformExtract_ms: _extractMs,
-    synthUpdate_ms:     _synthUpdateMs,
-    waveformDraw_ms:    _waveformDrawMs,
-    fft_ms:             _ap.fftMs,
-    spectrumDraw_ms:    _ap.spectrumDrawMs,
-    wavetablePrep_ms:   _ap.wavetablePrepMs,
-    heapUsedMB_before:  _heapBefore,
-    heapUsedMB_after:   _heapAfter,
-  };
-
-  utOnCaptureAttempt(waveform, perf);
   enterAnalysisView();
 }
 
@@ -375,8 +332,6 @@ function updateAnalysisWaveform(waveform) {
     return;
   }
 
-  // Both extractWaveformFromImageData and createTestWaveform return freshly
-  // allocated Float32Arrays — storing the reference directly is safe.
   lastRenderedWaveform = waveform;
   synthEngine.updateWaveform(lastRenderedWaveform);
   drawWaveform(lastRenderedWaveform);
@@ -509,257 +464,3 @@ window.addEventListener('DOMContentLoaded', () => {
     updateDownloadButtonState();
   }
 });
-
-// USER TESTING TRACKER
-// Silently collects session metrics for remote user testing.
-// Remove this section after FYP submission.
-
-const userTestData = {
-  sessionStart: new Date().toISOString(),
-  device: DEVICE_MODE_MEDIA_QUERY.matches ? 'mobile' : 'desktop',
-  browser: navigator.userAgent,
-  sessionDurationMs: null,
-
-  // Session-level totals — one counter per trackable UI element.
-  totals: {
-    captureAttempts: 0,
-    successfulCaptures: 0,
-    playPresses: 0,
-    periodAdjustments: 0,
-    spectrumScaleSwitches: 0,
-    roiAdjustments: 0,
-    roiResets: 0,
-    infoLabelClicks: 0,
-    infoLabelHovers: 0,
-    testSignalGenerations: 0,
-  },
-
-  infoLabelInteractions: {}, // per-label hover + click detail
-  testSignalUses: [],        // { shape, uiAfterCapture } per generation
-  captures: [],              // { index, timestamp, msSinceLastCapture, wasNull, userRating, uiAfterCapture }
-};
-
-const _sessionStartTime = performance.now();
-
-// Interactions accumulated since the last capture or test signal entry was recorded.
-// These represent what the user did AFTER seeing the previous result.
-// Flushed into that entry's uiAfterCapture field when the next event fires.
-let _pendingInteractions = {
-  playPresses: 0,
-  periodAdjustments: 0,
-  spectrumScaleSwitches: 0,
-  roiAdjustments: 0,
-  roiResets: 0,
-  infoLabelClicks: 0,
-  infoLabelHovers: 0,
-};
-
-// The most recent capture or testSignal entry, awaiting its uiAfterCapture fill.
-let _lastEventEntry = null;
-let _lastCaptureTime = null; // performance.now() at the previous capture attempt
-let _perfSamples = [];    // pipeline perf objects collected separately from capture entries
-
-// Copy pending interactions into the previous entry and reset the counters.
-// Called at the start of each new capture attempt or test signal generation,
-// and at download time to capture any trailing interactions after the last event.
-function _flushPendingToLastEntry() {
-  if (_lastEventEntry !== null) {
-    _lastEventEntry.uiAfterCapture = { ..._pendingInteractions };
-  }
-  for (const key of Object.keys(_pendingInteractions)) {
-    _pendingInteractions[key] = 0;
-  }
-}
-
-// Record a per-capture entry. uiAfterCapture starts null and is filled when the next event fires.
-function utRecordCapture(wasNull, userRating, msSinceLastCapture) {
-  const entry = {
-    index: userTestData.totals.captureAttempts,
-    timestamp: new Date().toISOString(),
-    msSinceLastCapture: msSinceLastCapture ?? null,
-    wasNull,
-    userRating: userRating ?? null,
-    uiAfterCapture: null,
-  };
-  userTestData.captures.push(entry);
-  _lastEventEntry = entry;
-}
-
-// Show the single-question rating bar below the waveform after a successful capture.
-function utShowCaptureRatingPrompt(msSinceLastCapture) {
-  // Record immediately with "No rating" — updated if the user clicks a rating button.
-  utRecordCapture(false, 'No rating', msSinceLastCapture);
-
-  const bar = document.getElementById('utRatingBar');
-  if (!bar) return;
-
-  bar.style.display = 'flex';
-
-  // Clone buttons to remove any previous listeners.
-  bar.querySelectorAll('.ut-rating-btn').forEach(btn => {
-    const fresh = btn.cloneNode(true);
-    btn.replaceWith(fresh);
-    fresh.addEventListener('click', () => {
-      bar.style.display = 'none';
-      // Update the already-recorded entry with the actual rating.
-      if (_lastEventEntry) _lastEventEntry.userRating = fresh.dataset.value;
-    });
-  });
-}
-
-// Download all collected test data as a plain-text file.
-function utDownloadResults() {
-  // Flush any trailing interactions after the last capture into that entry.
-  _flushPendingToLastEntry();
-
-  const _ap = synthEngine.drainAllPerfSamples?.() ?? { fft: [], spectrumDraw: [], wavetablePrep: [] };
-
-  function _stats(arr) {
-    const a = arr.filter(Number.isFinite);
-    if (!a.length) return null;
-    const n = a.length;
-    const sorted = [...a].sort((x, y) => x - y);
-    const mean = a.reduce((s, v) => s + v, 0) / n;
-    const stddev = Math.sqrt(a.reduce((s, v) => s + (v - mean) ** 2, 0) / n);
-    const p95 = sorted[Math.min(n - 1, Math.ceil(0.95 * n) - 1)];
-    return {
-      n,
-      mean:   parseFloat(mean.toFixed(3)),
-      stddev: parseFloat(stddev.toFixed(3)),
-      min:    parseFloat(sorted[0].toFixed(3)),
-      max:    parseFloat(sorted[n - 1].toFixed(3)),
-      p95:    parseFloat(p95.toFixed(3)),
-    };
-  }
-
-  const _cp = _perfSamples;
-  const _heapDeltas = _cp
-    .filter(p => p?.heapUsedMB_before != null && p?.heapUsedMB_after != null)
-    .map(p => parseFloat((p.heapUsedMB_after - p.heapUsedMB_before).toFixed(2)));
-  userTestData.perfSummary = {
-    pipeline_ms:        _stats(_cp.map(p => p?.pipeline_ms).filter(Number.isFinite)),
-    imageProc_ms:       _stats(_cp.map(p => p?.imageProc_ms).filter(Number.isFinite)),
-    waveformExtract_ms: _stats(_cp.map(p => p?.waveformExtract_ms).filter(Number.isFinite)),
-    synthUpdate_ms:     _stats(_cp.map(p => p?.synthUpdate_ms).filter(Number.isFinite)),
-    waveformDraw_ms:    _stats(_cp.map(p => p?.waveformDraw_ms).filter(Number.isFinite)),
-    fft_ms:             _stats(_ap.fft),
-    spectrumDraw_ms:    _stats(_ap.spectrumDraw),
-    wavetablePrep_ms:   _stats(_ap.wavetablePrep),
-    heapDeltaMB:        _stats(_heapDeltas),
-    heapBeforeMB:       _stats(_cp.map(p => p?.heapUsedMB_before).filter(Number.isFinite)),
-  };
-
-  userTestData.sessionDurationMs = parseFloat((performance.now() - _sessionStartTime).toFixed(2));
-
-  const blob = new Blob([JSON.stringify(userTestData, null, 2)], { type: 'text/plain' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'user_testing_results.txt';
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
-}
-
-// Wire up tracker hooks once the DOM is ready.
-window.addEventListener('DOMContentLoaded', () => {
-  const playBtn = document.getElementById('playSynth');
-  if (playBtn) {
-    playBtn.addEventListener('click', () => {
-      userTestData.totals.playPresses++;
-      _pendingInteractions.playPresses++;
-    });
-  }
-
-  const periodInput = document.getElementById('waveformPeriodMs');
-  if (periodInput) {
-    periodInput.addEventListener('change', () => {
-      userTestData.totals.periodAdjustments++;
-      _pendingInteractions.periodAdjustments++;
-    });
-  }
-
-  // Info label interactions — track hover and click separately per label, and in pending totals.
-  document.querySelectorAll('.info-trigger').forEach(btn => {
-    const label = btn.getAttribute('aria-label') || btn.textContent.trim();
-    const record = (type) => {
-      if (!userTestData.infoLabelInteractions[label]) {
-        userTestData.infoLabelInteractions[label] = { hover: 0, click: 0 };
-      }
-      userTestData.infoLabelInteractions[label][type]++;
-      if (type === 'click') {
-        userTestData.totals.infoLabelClicks++;
-        _pendingInteractions.infoLabelClicks++;
-      } else {
-        userTestData.totals.infoLabelHovers++;
-        _pendingInteractions.infoLabelHovers++;
-      }
-    };
-    btn.addEventListener('click',      () => record('click'));
-    btn.addEventListener('mouseenter', () => record('hover'));
-  });
-
-  // Test signal generator — flush pending into previous entry, then record this generation.
-  const testSignalBtn = document.getElementById('testSignal');
-  const testSignalTypeEl = document.getElementById('testSignalType');
-  if (testSignalBtn) {
-    testSignalBtn.addEventListener('click', () => {
-      _flushPendingToLastEntry();
-      userTestData.totals.testSignalGenerations++;
-      const entry = { shape: testSignalTypeEl?.value ?? null, uiAfterCapture: null };
-      userTestData.testSignalUses.push(entry);
-      _lastEventEntry = entry;
-    });
-  }
-
-  const procCanvas = document.getElementById('processingCanvas');
-  if (procCanvas) {
-    procCanvas.addEventListener('pointerup', () => {
-      userTestData.totals.roiAdjustments++;
-      _pendingInteractions.roiAdjustments++;
-    });
-  }
-
-  const resetROIBtn = document.getElementById('resetROI');
-  if (resetROIBtn) {
-    resetROIBtn.addEventListener('click', () => {
-      userTestData.totals.roiResets++;
-      _pendingInteractions.roiResets++;
-    });
-  }
-
-  const scaleSelect = document.getElementById('spectrumScale');
-  if (scaleSelect) {
-    scaleSelect.addEventListener('change', () => {
-      userTestData.totals.spectrumScaleSwitches++;
-      _pendingInteractions.spectrumScaleSwitches++;
-    });
-  }
-
-  const downloadTestBtn = document.getElementById('downloadTestResults');
-  if (downloadTestBtn) {
-    downloadTestBtn.addEventListener('click', utDownloadResults);
-  }
-});
-
-// Called from processCapturedImage — flush post-previous-capture interactions, then record this attempt.
-function utOnCaptureAttempt(waveform, perf) {
-  _flushPendingToLastEntry();
-
-  const now = performance.now();
-  const msSinceLast = _lastCaptureTime !== null
-    ? parseFloat((now - _lastCaptureTime).toFixed(2))
-    : null;
-  _lastCaptureTime = now;
-
-  userTestData.totals.captureAttempts++;
-  if (perf) _perfSamples.push(perf);
-
-  if (!waveform || waveform.length === 0) {
-    utRecordCapture(true, null, msSinceLast);
-    return;
-  }
-
-  userTestData.totals.successfulCaptures++;
-  utShowCaptureRatingPrompt(msSinceLast);
-}

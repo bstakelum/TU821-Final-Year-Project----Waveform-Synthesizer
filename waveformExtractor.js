@@ -8,10 +8,8 @@ const TRACE_EXTRACTION_CONFIG = {
   medianRadius: 2, // Light smoothing to reduce stair-stepping without reshaping the waveform.
 };
 
-// Main entry point: turn the processed image into a normalized waveform.
-// The waveform maintains its proportional position and size within the ROI.
-// Columns with no detected trace become zero. The ROI crop directly controls
-// the scale — cropping tightly to one cycle fills the panel with one cycle.
+// Turn the processed image into a normalized Float32Array waveform.
+// Columns with no detected trace become zero.
 export function extractWaveformFromImageData(imageData) {
   if (!imageData || !Number.isFinite(imageData.width) || !Number.isFinite(imageData.height)) {
     return null;

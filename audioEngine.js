@@ -31,8 +31,7 @@ export function createSynthAudioEngine({
   // Persistent buffers reused across redraws to avoid per-frame heap allocation.
   const spectrumBarsBuffer = new Float32Array(SPECTRUM_BAR_COUNT);
 
-  // Pre-built RGB colour lookup table indexed by quantised magnitude (0–255).
-  // Avoids 160 template-string allocations per spectrum redraw.
+  // Pre-built RGB colour lookup table indexed by magnitude (0–255).
   const spectrumColourTable = (() => {
     const table = new Array(256);
     for (let i = 0; i < 256; i++) {
@@ -45,12 +44,8 @@ export function createSynthAudioEngine({
     return table;
   })();
 
-  // Per-size twiddle factor cache: maps fftSize -> { cos: Float64Array, sin: Float64Array }.
-  // Computed once per size and reused on every subsequent FFT call.
+  // Cached trig values for each FFT size, computed once and reused.
   const twiddleCache = new Map();
-  const _perfSamples = { fft: [], spectrumDraw: [], wavetablePrep: [] };
-  let _lastPerfMs = { fftMs: null, spectrumDrawMs: null, wavetablePrepMs: null };
-
   const spectrumCtx = spectrumCanvas ? spectrumCanvas.getContext('2d') : null;
 
   // Store a new waveform and refresh the spectrum.
@@ -113,9 +108,7 @@ export function createSynthAudioEngine({
 
     stopCustomSynthesis();
 
-    // Wait for the release to finish before suspending. Suspending immediately
-    // freezes the audio clock, cancelling all scheduled automation events
-    // (including the gain fade and the deferred source.stop), causing a hard click.
+    // Wait for the fade-out to finish before suspending to avoid a click.
     if (audioContext.state === 'running') {
       await new Promise((resolve) => setTimeout(resolve, (RELEASE_SECONDS + 0.05) * 1000));
       if (audioContext.state === 'running') {
@@ -156,14 +149,6 @@ export function createSynthAudioEngine({
     stopAudio,
     exportWaveformToCSV,
     get preparedWavetable() { return preparedWavetable; },
-    getLastPerfMs: () => ({ ..._lastPerfMs }),
-    drainAllPerfSamples: () => {
-      const s = { fft: _perfSamples.fft.slice(), spectrumDraw: _perfSamples.spectrumDraw.slice(), wavetablePrep: _perfSamples.wavetablePrep.slice() };
-      _perfSamples.fft.length = 0;
-      _perfSamples.spectrumDraw.length = 0;
-      _perfSamples.wavetablePrep.length = 0;
-      return s;
-    },
   };
 
   // Save the prepared waveform as a simple CSV file.
@@ -297,7 +282,6 @@ export function createSynthAudioEngine({
 
   // Run a simple radix-2 FFT on the waveform for the spectrum display.
   function computeFftMagnitudes(signal) {
-    const _t0 = performance.now();
     const fftSize = nextPowerOfTwo(signal.length);
     const real = new Float32Array(fftSize);
     const imag = new Float32Array(fftSize);
@@ -336,10 +320,6 @@ export function createSynthAudioEngine({
     if (!twiddle) {
       const cosTable = new Float64Array(fftSize >> 1);
       const sinTable = new Float64Array(fftSize >> 1);
-      // Store one entry per (size, offset) pair using a flat layout:
-      // for each butterfly stage of size s, halfSize = s>>1 entries starting
-      // at cumulative offset sum(prev halfSizes). Simpler: index by absolute
-      // half-period position — angle = -2π * k / fftSize for k = 0..fftSize/2-1.
       for (let k = 0; k < fftSize >> 1; k++) {
         const angle = (-2 * Math.PI * k) / fftSize;
         cosTable[k] = Math.cos(angle);
@@ -378,16 +358,12 @@ export function createSynthAudioEngine({
       magnitudes[i] = Math.hypot(real[i], imag[i]) / fftSize;
     }
 
-    // Single-sided spectrum: double all bins except DC (i=0) and Nyquist (i=magnitudeCount-1)
-    // to account for the energy of the conjugate-symmetric negative-frequency bins.
+    // Double the non-DC, non-Nyquist bins to account for both sides of the spectrum.
     for (let i = 1; i < magnitudeCount - 1; i++) {
       magnitudes[i] *= 2;
     }
 
-    const _fftResult = { fftSize, analysisLength: fftSize, magnitudes };
-    _lastPerfMs.fftMs = parseFloat((performance.now() - _t0).toFixed(3));
-    _perfSamples.fft.push(_lastPerfMs.fftMs);
-    return _fftResult;
+    return { fftSize, analysisLength: fftSize, magnitudes };
   }
 
   function buildSpectrumBarsFromFft(magnitudes, sampleRateHz, minHz, maxHz, bars, scale) {
@@ -425,7 +401,6 @@ export function createSynthAudioEngine({
       clearSpectrumCanvas();
       return;
     }
-    const _t0 = performance.now();
 
     const width = spectrumCanvas.width;
     const height = spectrumCanvas.height;
@@ -588,12 +563,9 @@ export function createSynthAudioEngine({
     spectrumCtx.fillStyle = '#ffffff';
     spectrumCtx.fillText('Frequency (Hz)', plotX + plotWidth * 0.5, height - 1);
     spectrumCtx.textAlign = 'left';
-    _lastPerfMs.spectrumDrawMs = parseFloat((performance.now() - _t0).toFixed(3));
-    _perfSamples.spectrumDraw.push(_lastPerfMs.spectrumDrawMs);
   }
   // Clean the waveform and refresh the spectrum.
   function prepareWaveformForSynthesis(waveform) {
-    const _t0 = performance.now();
     const finiteWaveform = toFiniteWaveform(waveform);
     if (!finiteWaveform) {
       preparedWavetable = null;
@@ -604,8 +576,6 @@ export function createSynthAudioEngine({
     removeDcOffset(finiteWaveform);
     preparedWavetable = finiteWaveform;
     drawSpectrumFromWaveform(preparedWavetable);
-    _lastPerfMs.wavetablePrepMs = parseFloat((performance.now() - _t0).toFixed(3));
-    _perfSamples.wavetablePrep.push(_lastPerfMs.wavetablePrepMs);
   }
 
   function startCustomSynthesis() {
@@ -620,10 +590,8 @@ export function createSynthAudioEngine({
       activeSourceNode = null;
     }
 
-    // Tile the waveform so the AudioBuffer is at least MAX_PANEL_DURATION_SECONDS long.
-    // This keeps playbackRate >= 1 for all valid periods, avoiding mobile browser
-    // issues where AudioBufferSourceNode becomes inaudible when playbackRate < 1
-    // on short loop buffers (threshold coincides with N/sampleRate seconds).
+    // Tile the waveform into a long enough buffer so playback rate stays at or above 1,
+    // which prevents silence on some mobile browsers for very short loops.
     const minBufferSamples = Math.ceil(MAX_PANEL_DURATION_SECONDS * audioContext.sampleRate);
     const repeatCount = Math.max(1, Math.ceil(minBufferSamples / preparedWavetable.length));
     const tiledLength = preparedWavetable.length * repeatCount;
@@ -645,11 +613,8 @@ export function createSynthAudioEngine({
 
     source.connect(masterGainNode);
 
-    // Schedule gain ramp slightly ahead of currentTime so the automation
-    // is guaranteed to be in the future when the audio thread processes it.
-    // Using linearRampToValueAtTime for attack avoids the exponential-from-zero
-    // discontinuity that causes a click when the context clock has already
-    // advanced past 'now' by the time the scheduler runs.
+    // Schedule the gain ramp a few milliseconds ahead to guarantee smooth fade-in
+    // and avoid clicks if the audio clock has already moved past 'now'.
     const now = audioContext.currentTime;
     const startAt = now + 0.005; // 5 ms scheduling lookahead
     masterGainNode.gain.cancelScheduledValues(now);

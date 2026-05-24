@@ -39,7 +39,7 @@ The spectrum panel then shows the frequency content of that repeating waveform u
 5. Play the synthesized sound.
 6. Change the waveform period to hear the pitch change.
 7. Inspect frequency content in the spectrum. Switch between linear and log view if needed.
-8. Download waveform to .CSV file if external testing is required.
+8. Download the waveform as a CSV file for external analysis if needed.
 
 The signal generator panel can be used instead of the camera when checking the audio and spectrum features.
 

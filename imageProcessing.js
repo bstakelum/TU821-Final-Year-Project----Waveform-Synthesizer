@@ -59,13 +59,13 @@ export function createImageProcessor({
     // Join short horizontal breaks in the line.
     horizontalClose(width, height, bufferA, bufferB, 2);
 
-    // Filter components of image to prefer waveform like shapes.
+    // Keep only the connected region most likely to be the waveform trace.
     filterByConnectedComponents(width, height, bufferB, defaultConfig.minComponentSizePixels);
 
     // Build the processed image output — upscale the grayscale buffer first.
     const result = restoreImageDataToFullSize(bufferB, originalWidth, originalHeight, roi);
 
-    // Binarize image
+    // Convert the processed image to strict black and white.
     applyBinaryMask(result.data);
 
     return result;
@@ -86,10 +86,7 @@ export function createImageProcessor({
     return new ImageData(cropped, width, height);
   }
 
-  // Scale the processed ROI content into the original frame dimensions using
-  // bilinear interpolation. The ROI always shares the output frame's aspect
-  // ratio (enforced by cameraController), so content fills the frame exactly
-  // with no bars — the ROI acts as a zoom without distorting the waveform shape.
+  // Scale the processed ROI back up to the full frame size using bilinear interpolation.
   function restoreImageDataToFullSize(data, originalImageWidth, originalImageHeight, roi) {
     const { width: roiWidth, height: roiHeight } = roi;
     const result = new ImageData(originalImageWidth, originalImageHeight);
@@ -150,7 +147,7 @@ export function createImageProcessor({
     return 255;
   }
 
-  // Check if a pixel in the mask is considered foreground (part of the line).
+  // Set each pixel to fully white or fully black based on a simple threshold.
   function applyBinaryMask(data) {
     for (let i = 0; i < data.length; i += 4) {
       const value = data[i] === 255 ? 255 : 0;
@@ -306,7 +303,7 @@ export function createImageProcessor({
     }
   }
 
-  // Score connected components and damp weaker ones instead of deleting them outright.
+  // Keep only the connected region most likely to be the waveform trace.
   function filterByConnectedComponents(width, height, data, minSizePixels) {
     const n = (data.length / 4);
     const label = new Int32Array(n);
@@ -401,7 +398,6 @@ export function createImageProcessor({
             if (centerY > maxCenterY) maxCenterY = centerY;
           }
 
-          // Remove widthCoverageRatio, thinnessPreference, and continuityPreference from scoring
           const centerlineExcursion = Math.max(0, maxCenterY - minCenterY);
           const excursionReference = Math.max(6, widthSpan * defaultConfig.componentExcursionWidthRatio);
           const normalizedExcursion = Math.max(0, Math.min(1, centerlineExcursion / excursionReference));

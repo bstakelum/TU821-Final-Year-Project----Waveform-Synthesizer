@@ -228,7 +228,6 @@ export function createCameraController({
     return track.getSettings();
   }
 
-  // Keep the slider values and labels in sync.
   function syncROIDisplay() {}
 
   function clampROI(nextLeftPct, nextTopPct, nextRightPct, nextBottomPct) {
@@ -406,7 +405,7 @@ export function createCameraController({
       if (mode.includes('bottom')) nextBottomPct += deltaYPct;
 
       // Enforce aspect ratio: widthPct must equal heightPct so the ROI always
-      // matches the output canvas shape, eliminating letterbox bars on capture.
+      // matches the output canvas shape.
       // The dominant axis (larger absolute pixel delta) drives the target size.
       const candidateWidthPct = Math.max(0, nextRightPct - nextLeftPct);
       const candidateHeightPct = Math.max(0, nextBottomPct - nextTopPct);
