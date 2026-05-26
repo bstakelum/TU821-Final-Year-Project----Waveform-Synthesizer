@@ -434,11 +434,6 @@ export function createSynthAudioEngine({
       bars,
       spectrumScale,
     );
-    let maxMag = 0;
-
-    for (let i = 0; i < bars; i++) {
-      if (mags[i] > maxMag) maxMag = mags[i];
-    }
 
     // Axes and labels.
     spectrumCtx.strokeStyle = '#334155';
@@ -452,18 +447,18 @@ export function createSynthAudioEngine({
     spectrumCtx.fillStyle = '#8aa0b6';
     spectrumCtx.font = '10px sans-serif';
 
-    const yTicks = [0, 1, 2];
+    const yTicks = [0, 0.5, 1];
     for (let i = 0; i < yTicks.length; i++) {
       const t = yTicks[i];
-      const y = plotY + plotHeight - (t / 2) * plotHeight;
+      const y = plotY + plotHeight - t * plotHeight;
       spectrumCtx.fillRect(plotX - 3, Math.round(y), 3, 1);
       spectrumCtx.fillText(`${t}`, plotX - 16, y + 3);
     }
 
     // Draw bars
     for (let i = 0; i < bars; i++) {
-      const magnitude = maxMag > 0 ? mags[i] / maxMag : 0;
-      const barHeight = Math.max(1, Math.round(magnitude * plotHeight));
+      const magnitude = mags[i];
+      const barHeight = Math.max(1, Math.round(Math.min(1, magnitude) * plotHeight));
       const leftRatio = i / bars;
       const rightRatio = (i + 1) / bars;
       const x0 = Math.round(plotX + leftRatio * plotWidth);
@@ -471,7 +466,7 @@ export function createSynthAudioEngine({
       const widthPx = Math.max(1, x1 - x0);
       const x = x0;
       const y = plotY + plotHeight - barHeight;
-      spectrumCtx.fillStyle = spectrumColourTable[Math.round(magnitude * 255)];
+      spectrumCtx.fillStyle = spectrumColourTable[Math.min(255, Math.round(magnitude * 255))];
       spectrumCtx.fillRect(x, y, widthPx, barHeight);
     }
 
